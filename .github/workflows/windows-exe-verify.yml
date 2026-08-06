@@ -63,6 +63,15 @@ on:
       source_ref:
         description: "Branch or commit sha of thelongview-app to build"
         default: "main"
+      # OFF by default, and deliberately a separate decision from "did it pass".
+      # Publishing is not a report, it is a commitment: the path is keyed by commit sha and
+      # cannot be overwritten, so a sha published today can never be republished. While a
+      # version is in review and might come back needing a rebuild, that is a door worth
+      # leaving shut. Verification runs as often as it likes; publishing waits to be asked.
+      publish:
+        description: "Upload the signed installer to its permanent URL. Leave false until the build is one you intend to ship: a published sha can never be republished."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -406,7 +415,7 @@ jobs:
       # pasted into Partner Center, so nothing that failed a check gets one. Skipped entirely
       # for break_mode runs, whose whole purpose is to produce a broken installer.
       - name: Publish the signed installer to a permanent URL
-        if: ${{ success() && inputs.break_mode == 'none' }}
+        if: ${{ success() && inputs.break_mode == 'none' && inputs.publish }}
         id: publish
         shell: pwsh
         env:
@@ -439,7 +448,7 @@ jobs:
       # that serves different bytes than were verified above would make this whole run
       # meaningless.
       - name: Prove the URL is direct and serves the bytes that were verified
-        if: ${{ success() && inputs.break_mode == 'none' }}
+        if: ${{ success() && inputs.break_mode == 'none' && inputs.publish }}
         shell: pwsh
         run: |
           $url = "${{ steps.publish.outputs.url }}"
@@ -469,7 +478,7 @@ jobs:
           "`n$a  SHA256 of the published installer" | Out-File artifacts/package-url.txt -Append
 
       - name: Say where the package is
-        if: ${{ success() && inputs.break_mode == 'none' }}
+        if: ${{ success() && inputs.break_mode == 'none' && inputs.publish }}
         shell: pwsh
         run: |
           "## Windows package" >> $env:GITHUB_STEP_SUMMARY
