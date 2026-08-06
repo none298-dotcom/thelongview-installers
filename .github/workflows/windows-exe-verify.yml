@@ -66,10 +66,18 @@ on:
 
 permissions:
   contents: read
+  id-token: write     # OIDC token for Azure Trusted Signing. No stored credential exists.
 
 jobs:
   build-and-verify:
     runs-on: windows-latest
+    # TRAP, already paid for once on the other project: `secrets` is not valid in a step level
+    # `if:`. Surfacing the values as job level `env` is the supported way for a step to ask
+    # "is signing configured here", and it keeps the build working in a fork that has no Azure
+    # access at all, which then simply produces an unsigned installer.
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
     steps:
       # The source is NOT in this repo. It is fetched here into the runner's
       # workspace, which is destroyed with the VM, using a deploy key that has
@@ -169,6 +177,56 @@ jobs:
           if (-not $exe) { throw "No .exe produced" }
           Write-Host "installer: $($exe.FullName)  ($([int]($exe.Length/1MB)) MB)"
           "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      # ── Authenticode signing ──────────────────────────────────────────────
+      # Signed with a short-lived certificate Azure mints per run. Authentication is
+      # OIDC/federated: the runner exchanges a GitHub token for an Azure one, so the AZURE_*
+      # values are identifiers, not passwords, and no signing credential exists to leak.
+      #
+      # TRAP, already paid for once: azure/login MUST run first. trusted-signing-action
+      # authenticates through DefaultAzureCredential, which knows nothing about GitHub OIDC on
+      # its own; without this step it falls through every credential type and dies with
+      # "SignerSign() failed", which reads like a signing problem rather than an auth one.
+      - name: Azure login (federated, OIDC)
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign the installer (Azure Trusted Signing)
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
+          azure-client-id: ${{ env.AZURE_CLIENT_ID }}
+          endpoint: https://eus.codesigning.azure.net/
+          trusted-signing-account-name: mlcsigning
+          certificate-profile-name: mlc-public-trust
+          # TRAP, already paid for once: the signing client rejects a relative path, so this
+          # must be absolute. github.workspace is what makes it absolute.
+          files-folder: ${{ github.workspace }}\android\desktop\build\compose\binaries\main\exe
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # An unsigned installer triggers SmartScreen and is rejected for an EXE/MSI Store
+      # submission, so this reports the real signer subject rather than assuming it.
+      - name: Verify the signature actually landed
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature "${{ steps.find.outputs.path }}"
+          Write-Host "signature status: $($sig.Status)"
+          Write-Host "signer:           $($sig.SignerCertificate.Subject)"
+          Write-Host "timestamp:        $($sig.TimeStamperCertificate.Subject)"
+          if ("${{ env.AZURE_CLIENT_ID }}" -eq "") {
+            Write-Host "::warning::No Azure credentials in this context, so the installer is UNSIGNED. Fine for a fork, never for a release."
+          } elseif ($sig.Status -ne "Valid") {
+            Write-Host "::error::The installer is not validly signed ($($sig.Status)). It will trip SmartScreen and will be rejected as a Store package."
+            exit 1
+          }
 
       - name: Silent install, exactly as a certifier does
         shell: pwsh
