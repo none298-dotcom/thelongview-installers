@@ -71,6 +71,14 @@ jobs:
           ref: ${{ inputs.source_ref }}
           ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
 
+      # Second, and into a subdirectory, because the checkout above owns the
+      # workspace root and cleans it. This is where the verification scripts
+      # live; they are CI, not application source, so they stay in this repo.
+      - name: Check out this repo's own scripts
+        uses: actions/checkout@v4
+        with:
+          path: ci
+
       - name: Record exactly which commit is being verified
         shell: pwsh
         run: |
@@ -89,6 +97,19 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      # Runners come up at 1024x768. The app's window is larger than that, so the first run's
+      # screenshot showed a welcome screen with no button on it, and the button was simply below
+      # the bottom of the screen. A verification rig that cannot see the bottom of the window
+      # cannot check the one control that matters.
+      - name: Give the runner a display the window fits on
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force } catch { Write-Host "::warning::Set-DisplayResolution failed: $_" }
+          Add-Type -AssemblyName System.Windows.Forms
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          Write-Host "display is now $($b.Width)x$($b.Height)"
 
       # The point of this input is the owner's rule: a new test proves nothing
       # until it goes RED on the known-broken input. perUserInstall = true is
@@ -129,28 +150,31 @@ jobs:
           }
 
       # ── The two things certification actually checks ──────────────────────
-      - name: Assert an All Users Start Menu shortcut (policy 10.1.2.10)
+      # Deliberately ONE step covering both policies. As two steps, the first
+      # failure skipped the second, so the run that was supposed to prove both
+      # assertions bite only ever exercised one of them. Both are evaluated
+      # here, both are reported, and the step exits non zero at the end.
+      - name: Assert the Microsoft Store certification requirements
         shell: pwsh
         run: |
+          $failures = 0
           $allUsers = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
           $perUser  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
           $found = @()
           foreach ($r in @($allUsers, $perUser)) {
             if (Test-Path $r) { $found += Get-ChildItem $r -Recurse -Filter '*Long View*.lnk' -ErrorAction SilentlyContinue }
           }
-          if (-not $found) {
-            Write-Host "::error::No Start Menu shortcut anywhere. This is certification 10.1.2.10, no accessible method of being launched."
-            exit 1
-          }
           $found | ForEach-Object { Write-Host "shortcut: $($_.FullName)" }
-          if (-not ($found | Where-Object { $_.FullName -like "$env:ProgramData*" })) {
-            Write-Host "::error::Shortcut exists ONLY under the installing user's profile. That is the per-user install that failed certification 10.1.2.10: a certifier installs elevated then inspects as a normal user and sees nothing."
-            exit 1
+          if (-not $found) {
+            Write-Host "::error::10.1.2.10 FAILED. No Start Menu shortcut anywhere, so there is no accessible method of being launched."
+            $failures++
           }
+          elseif (-not ($found | Where-Object { $_.FullName -like "$env:ProgramData*" })) {
+            Write-Host "::error::10.1.2.10 FAILED. The shortcut exists ONLY under the installing user's profile. That is the per-user install that failed certification twice: a certifier installs elevated, then inspects as a normal user and sees nothing."
+            $failures++
+          }
+          else { Write-Host "10.1.2.10 ok, All Users shortcut present" }
 
-      - name: Assert an HKLM Add or Remove Programs entry (policy 10.2.7)
-        shell: pwsh
-        run: |
           $keys = @(
             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
             'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
@@ -162,18 +186,22 @@ jobs:
             if ($entry) { break }
           }
           if (-not $entry) {
-            Write-Host "::error::No HKLM uninstall entry. This is certification 10.2.7, no entry in the Add or Remove Programs list."
-            Write-Host "--- checking HKCU, where a per-user install would have put it ---"
+            Write-Host "::error::10.2.7 FAILED. No HKLM uninstall entry, so nothing appears in the Add or Remove Programs list."
+            Write-Host "--- checking HKCU, where a per-user install would have put it instead ---"
             Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -EA SilentlyContinue |
               Where-Object { $_.DisplayName -like '*Long View*' } | Select-Object DisplayName,UninstallString | Format-List
-            exit 1
+            $failures++
           }
-          Write-Host "ARP DisplayName:     $($entry.DisplayName)"
-          Write-Host "ARP UninstallString: $($entry.UninstallString)"
-          if (-not $entry.UninstallString) {
-            Write-Host "::error::Uninstall entry exists but has no UninstallString, so there is nothing for a user to run."
-            exit 1
+          elseif (-not $entry.UninstallString) {
+            Write-Host "::error::10.2.7 FAILED. The uninstall entry exists but has no UninstallString, so there is nothing for a user to run."
+            $failures++
           }
+          else {
+            Write-Host "10.2.7 ok, ARP DisplayName:     $($entry.DisplayName)"
+            Write-Host "10.2.7 ok, ARP UninstallString: $($entry.UninstallString)"
+          }
+
+          if ($failures -gt 0) { throw "$failures certification requirement(s) failed" }
 
       - name: Launch the INSTALLED binary
         id: launch
@@ -193,12 +221,15 @@ jobs:
           "pid=$($proc.Id)" >> $env:GITHUB_OUTPUT
 
       # ── The part that is not just "it is alive" ───────────────────────────
-      # Compose Desktop exposes its semantics tree to Windows UI Automation, so
-      # a control can be found by name and invoked without pixel coordinates.
-      # Whether that actually works for this toolkit is the open question this
-      # step exists to answer, so it REPORTS rather than fails the build. Once
-      # it is proven, it becomes a hard assertion.
-      - name: EXPERIMENT, can UI Automation see the Compose tree
+      # ANSWERED, and the answer was no: UIA finds the top level window and
+      # exactly one nameless Pane inside it. Compose Desktop draws through Skia
+      # and publishes no semantics tree, so there is no element to find by name
+      # and no InvokePattern to invoke. This step stays, as informational only,
+      # because it is also the accessibility check: the day Compose starts
+      # exposing its tree, or the day the Java Access Bridge is wired up, this
+      # log is where it will show. It must never gate the build, since it
+      # reports a known and currently expected absence.
+      - name: Report what UI Automation can see (accessibility, informational)
         continue-on-error: true
         shell: pwsh
         run: |
@@ -221,6 +252,14 @@ jobs:
           if ($all.Count -le 1) {
             Write-Host "::warning::UIA sees the window but no inner elements. Compose is not exposing its semantics tree here, so clicking will need a different mechanism."
           }
+
+      # THE ACTUAL TEST. Presses the app's primary button with real mouse input
+      # and requires the screen to change, having first proved with a negative
+      # control click on empty background that an unchanged screen is even
+      # achievable. See scripts/verify-ui.ps1 for why it works this way.
+      - name: Click the primary button and prove it did something
+        shell: pwsh
+        run: ./ci/scripts/verify-ui.ps1 -OutDir artifacts
 
       # Verify by LOOKING, per the owner's standing rule. This artifact is the
       # point of the whole run: a human can open it and see whether the app
