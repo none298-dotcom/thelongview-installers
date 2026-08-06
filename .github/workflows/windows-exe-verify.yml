@@ -268,6 +268,14 @@ jobs:
           }
           Write-Host "still running after ${{ inputs.wait_seconds }}s"
           "pid=$($proc.Id)" >> $env:GITHUB_OUTPUT
+          "exe=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      # The build shipped with the stock Java placeholder in its title bar and in Alt+Tab, and
+      # the owner has failed store submissions over exactly that before. It was caught by a
+      # human looking at a screenshot. It is checked here now.
+      - name: Assert the title bar icon is the app's icon, not the toolkit default
+        shell: pwsh
+        run: ./ci/scripts/verify-window-icon.ps1 -ExePath "${{ steps.launch.outputs.exe }}" -OutDir artifacts
 
       # ── The part that is not just "it is alive" ───────────────────────────
       # ANSWERED, and the answer was no: UIA finds the top level window and
