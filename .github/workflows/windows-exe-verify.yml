@@ -43,10 +43,20 @@ name: Build and verify Windows EXE
 on:
   workflow_dispatch:
     inputs:
-      break_per_user_install:
-        description: "Set true to build a DELIBERATELY BROKEN per-user installer, to prove the certification assertions actually go red. Never true for a real build."
-        type: boolean
-        default: false
+      # Each mode injects a DIFFERENT known defect, because one defect does not
+      # exercise every assertion. per_user_install was expected to fail both
+      # certification checks and only failed 10.1.2.10: jpackage still wrote the
+      # HKLM uninstall entry, so 10.2.7 passed and stayed unproven. It needs its
+      # own mutation, which is what remove_arp_entry is.
+      break_mode:
+        description: "Inject a known defect, to prove an assertion actually goes red. Always 'none' for a real build."
+        type: choice
+        default: none
+        options:
+          - none
+          - per_user_install   # shortcut lands only under APPDATA, must fail 10.1.2.10
+          - remove_arp_entry   # delete the HKLM uninstall key, must fail 10.2.7
+          - dead_button        # stub the welcome button's handler, must fail the click check
       wait_seconds:
         description: "How long to let the installed app run before judging it"
         default: "40"
@@ -87,7 +97,7 @@ jobs:
           $sha = git rev-parse HEAD
           Write-Host "verifying thelongview-app @ $sha"
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          "source_repo: none298-dotcom/thelongview-app`nsource_ref: ${{ inputs.source_ref }}`nsource_sha: $sha`nbroken_on_purpose: ${{ inputs.break_per_user_install }}" |
+          "source_repo: none298-dotcom/thelongview-app`nsource_ref: ${{ inputs.source_ref }}`nsource_sha: $sha`nbreak_mode: ${{ inputs.break_mode }}" |
             Out-File artifacts/provenance.txt
           "sha=$sha" >> $env:GITHUB_OUTPUT
         id: src
@@ -115,13 +125,35 @@ jobs:
       # until it goes RED on the known-broken input. perUserInstall = true is
       # precisely what failed MyLinedChart certification twice, so flipping it
       # here must make the two assertions below fail, loudly and by name.
-      - name: Optionally break the install scope, to prove the assertions bite
-        if: ${{ inputs.break_per_user_install }}
+      - name: Inject the requested defect, to prove an assertion goes red
+        if: ${{ inputs.break_mode != 'none' }}
         shell: pwsh
         run: |
-          $f = "android/desktop/build.gradle.kts"
-          (Get-Content $f -Raw).Replace("perUserInstall = false", "perUserInstall = true") | Set-Content $f
-          Write-Host "::warning::Built with perUserInstall = true ON PURPOSE. The certification assertions below MUST fail."
+          # Each patch must be verified to have APPLIED. A find-and-replace that silently
+          # matches nothing produces a clean build, a green run, and the false conclusion
+          # that the assertion caught something. Every branch below fails loudly instead.
+          switch ("${{ inputs.break_mode }}") {
+            "per_user_install" {
+              $f = "android/desktop/build.gradle.kts"
+              $t = Get-Content $f -Raw
+              if ($t -notmatch "perUserInstall = false") { throw "patch target not found in $f" }
+              $t.Replace("perUserInstall = false", "perUserInstall = true") | Set-Content $f
+              Write-Host "::warning::perUserInstall = true ON PURPOSE. Certification 10.1.2.10 MUST fail."
+            }
+            "dead_button" {
+              # The exact defect that failed the other app twice: a button that renders
+              # perfectly and runs nothing.
+              $f = "android/desktop/src/main/kotlin/com/thelongviewapp/desktop/onboarding/DesktopOnboarding.kt"
+              $t = Get-Content $f -Raw
+              $target = 'PrimaryButton("Begin", onClick = onBegin)'
+              if (-not $t.Contains($target)) { throw "patch target not found in $f" }
+              $t.Replace($target, 'PrimaryButton("Begin", onClick = {})') | Set-Content $f
+              Write-Host "::warning::The Begin button's handler is stubbed out ON PURPOSE. The click check MUST fail."
+            }
+            "remove_arp_entry" {
+              Write-Host "::warning::The HKLM uninstall entry will be deleted after install ON PURPOSE. Certification 10.2.7 MUST fail."
+            }
+          }
 
       - name: Build the EXE
         working-directory: android
@@ -148,6 +180,23 @@ jobs:
           if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
             throw "Silent install failed with exit code $($p.ExitCode)"
           }
+
+      # perUserInstall = true was expected to break both certification checks
+      # and broke only one: jpackage wrote the HKLM uninstall entry regardless,
+      # so 10.2.7 went green in the run that was supposed to prove it bites.
+      # This deletes that key so the 10.2.7 assertion faces the condition it
+      # claims to detect.
+      - name: Delete the Add or Remove Programs entry (break_mode only)
+        if: ${{ inputs.break_mode == 'remove_arp_entry' }}
+        shell: pwsh
+        run: |
+          $removed = 0
+          foreach ($k in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                           'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
+            Get-ItemProperty $k -EA SilentlyContinue | Where-Object { $_.DisplayName -like '*Long View*' } |
+              ForEach-Object { Write-Host "deleting $($_.PSPath)"; Remove-Item $_.PSPath -Recurse -Force; $removed++ }
+          }
+          if ($removed -eq 0) { throw "Nothing to delete, so this mutation would prove nothing" }
 
       # ── The two things certification actually checks ──────────────────────
       # Deliberately ONE step covering both policies. As two steps, the first

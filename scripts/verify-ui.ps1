@@ -1,22 +1,32 @@
 # Clicks the installed app's primary button and proves the click did something.
 #
-# WHY THIS IS NOT DONE THROUGH UI AUTOMATION
-# The first run asked UIA what it could see inside the window. The answer was one nameless
-# Pane and nothing else: Compose Desktop renders through Skia and, without the Java Access
-# Bridge, publishes no semantics tree at all. So there is no element to find by name and no
-# InvokePattern to call. (That is also an accessibility defect in its own right, recorded
-# separately; it is not this script's job.)
+# WHY NOT UI AUTOMATION
+# UIA was asked what it could see inside the window. The answer was the window and one nameless
+# Pane: Compose Desktop draws through Skia and, without the Java Access Bridge, publishes no
+# semantics tree, so there is no element to find by name and no InvokePattern to call. (That is
+# an accessibility defect in its own right, recorded separately. It is not this script's job.)
 #
-# What is left is what a person does: move the real mouse, press the real button, and look at
-# the screen afterwards.
+# What is left is what a person does: move the real mouse, press, and look at the screen.
 #
 # HOW A DEAD BUTTON IS CAUGHT
-# By comparing pixels before and after. A button that runs no handler leaves the screen
-# identical. That comparison is only trustworthy if "identical" is achievable at all, so the
-# script runs a NEGATIVE CONTROL first: it clicks a patch of empty background and requires the
-# screen NOT to change. If that control shows a difference, the screen is noisy (an animation,
-# a caret, a clock) and any later "it changed" would be meaningless, so the script fails rather
-# than reporting a green it has not earned.
+# By comparing pixels before and after. A button whose handler never runs leaves the screen
+# identical. That comparison only means something if "identical" is achievable, so a NEGATIVE
+# CONTROL runs first: a click on empty background, which must produce NO change. If it does
+# produce one, the screen is repainting on its own, a later "it changed" would prove nothing,
+# and the script fails rather than reporting a green it has not earned.
+#
+# TWO MISTAKES THIS SCRIPT ALREADY MADE, both of which reported a dead button that was not dead
+#  1. It measured GetWindowRect. On Windows 10 and later that includes the invisible DWM resize
+#     border, so the grab had a strip of DESKTOP WALLPAPER along the bottom: a full width band of
+#     non background colour, which the button finder happily selected and clicked. Everything is
+#     measured from the CLIENT rect now, which is the app and nothing else.
+#  2. It assumed the primary button spans the window. It does not. The onboarding content sits in
+#     a readable measure about 465px wide inside an 1100px window, and the button matches it, so
+#     a "must be wider than half the window" rule excluded the real button and preferred the
+#     window-wide artefact above.
+# The lesson in both: a button finder that can latch onto scenery will, and it fails in the
+# direction that looks like a product defect. Hence the vertical thickness requirement below,
+# which scenery does not have.
 
 param(
   [int]$SettleMs = 1500,
@@ -33,22 +43,25 @@ public class Win32 {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, IntPtr e);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
 }
 "@
 
 function Grab($rect) {
   $bmp = New-Object System.Drawing.Bitmap $rect.Width, $rect.Height
   $g = [System.Drawing.Graphics]::FromImage($bmp)
-  # Cursor is deliberately NOT drawn, so moving the mouse cannot by itself register as a change.
+  # The cursor is deliberately not drawn, so moving the mouse cannot itself register as a change.
   $g.CopyFromScreen($rect.Location, [System.Drawing.Point]::Empty, $rect.Size)
   $g.Dispose()
   return $bmp
 }
 
-# Fraction of pixels that differ beyond a small per-channel tolerance. Tolerance absorbs
-# subpixel text antialiasing; it does not absorb a screen that actually changed.
+# Fraction of sampled pixels differing beyond a small per channel tolerance. The tolerance
+# absorbs subpixel text antialiasing. It does not absorb a screen that actually changed.
 function DiffFraction($a, $b) {
   if ($a.Width -ne $b.Width -or $a.Height -ne $b.Height) { return 1.0 }
   $differing = 0; $total = 0
@@ -56,7 +69,7 @@ function DiffFraction($a, $b) {
     for ($x = 0; $x -lt $a.Width; $x += 3) {
       $total++
       $p = $a.GetPixel($x, $y); $q = $b.GetPixel($x, $y)
-      if ([Math]::Abs($p.R - $q.R) -gt 8 -or [Math]::Abs($p.G - $q.G) -gt 8 -or [Math]::Abs($p.B - $q.B) -gt 8) { $differing++ }
+      if ([Math]::Abs($p.R-$q.R) -gt 8 -or [Math]::Abs($p.G-$q.G) -gt 8 -or [Math]::Abs($p.B-$q.B) -gt 8) { $differing++ }
     }
   }
   return $differing / [double]$total
@@ -64,79 +77,107 @@ function DiffFraction($a, $b) {
 
 function Click($x, $y) {
   [Win32]::SetCursorPos($x, $y) | Out-Null
-  Start-Sleep -Milliseconds 200
+  Start-Sleep -Milliseconds 250
   [Win32]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero)   # left down
   Start-Sleep -Milliseconds 60
   [Win32]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero)   # left up
   Start-Sleep -Milliseconds $SettleMs
 }
 
-# ── Locate the window ────────────────────────────────────────────────────────
+# ── Locate the window's CLIENT area ──────────────────────────────────────────
 $proc = Get-Process -Name "The Long View" -ErrorAction SilentlyContinue |
         Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
 if (-not $proc) { throw "No process named 'The Long View' with a visible window" }
-[Win32]::SetForegroundWindow($proc.MainWindowHandle) | Out-Null
-Start-Sleep -Milliseconds 800
+$h = $proc.MainWindowHandle
+[Win32]::SetForegroundWindow($h) | Out-Null
+Start-Sleep -Milliseconds 900
 
-$r = New-Object Win32+RECT
-[Win32]::GetWindowRect($proc.MainWindowHandle, [ref]$r) | Out-Null
+$wr = New-Object Win32+RECT; [Win32]::GetWindowRect($h, [ref]$wr) | Out-Null
+$cr = New-Object Win32+RECT; [Win32]::GetClientRect($h, [ref]$cr) | Out-Null
+$origin = New-Object Win32+POINT; $origin.X = 0; $origin.Y = 0
+[Win32]::ClientToScreen($h, [ref]$origin) | Out-Null
+
 $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-Write-Host "screen:  $($screen.Width)x$($screen.Height)"
-Write-Host "window:  ($($r.Left),$($r.Top)) to ($($r.Right),$($r.Bottom))  = $($r.Right-$r.Left)x$($r.Bottom-$r.Top)"
+$cw = $cr.Right - $cr.Left; $ch = $cr.Bottom - $cr.Top
+Write-Host "screen: $($screen.Width)x$($screen.Height)"
+Write-Host "window frame: $($wr.Right-$wr.Left)x$($wr.Bottom-$wr.Top) at ($($wr.Left),$($wr.Top))"
+Write-Host "client area:  ${cw}x${ch} at ($($origin.X),$($origin.Y))"
 
-# A window bigger than the screen means the parts of the UI nearest the bottom edge, which is
-# where primary actions live, were never on screen to be clicked. Say so rather than hunting
-# for a button in the visible remainder and reporting whatever turns up.
-if ($r.Bottom -gt $screen.Bottom -or $r.Right -gt $screen.Right) {
-  Write-Host "::error::The window opens larger than the display ($($r.Right-$r.Left)x$($r.Bottom-$r.Top) on $($screen.Width)x$($screen.Height)). Its bottom edge, and the footer button with it, is off screen."
+# A window taller or wider than the display means the parts of the UI nearest the edges, which
+# is exactly where primary actions live, were never on screen to be clicked. Say that, rather
+# than hunting for a button in the visible remainder and reporting whatever turns up.
+if (($origin.Y + $ch) -gt $screen.Bottom -or ($origin.X + $cw) -gt $screen.Right) {
+  Write-Host "::error::The window opens larger than the display. Its bottom or right edge, and the footer button with it, is off screen."
   exit 1
 }
 
-$rect = New-Object System.Drawing.Rectangle $r.Left, $r.Top, ($r.Right-$r.Left), ($r.Bottom-$r.Top)
+$rect = New-Object System.Drawing.Rectangle $origin.X, $origin.Y, $cw, $ch
 $before = Grab $rect
 $before.Save("$OutDir/01-before-click.png")
 
-# ── Find the primary button by its colour, not by guessed coordinates ────────
-# It is the only full width block of flat non background colour in the lower part of the
-# window. Locating it by appearance means the check keeps working when padding changes, and
-# means a button that renders invisibly is a failure here rather than a silent pass.
-$bg = $before.GetPixel([int]($before.Width * 0.5), [int]($before.Height * 0.5))
+# ── Find the primary button by appearance ────────────────────────────────────
+# A button is a BLOCK: a run of non background pixels that repeats over many consecutive rows.
+# Scenery that previously fooled this (a window border, a sliver of wallpaper) is one or two
+# rows tall, so requiring thickness is what separates the two. Finding it by appearance rather
+# than by computed coordinates also means a button that renders invisibly fails here, which a
+# coordinate guess would have clicked and called alive.
+$MIN_RUN = 100      # px wide; the real button is ~465 in an 1100 window
+$MIN_ROWS = 20      # px tall; borders and wallpaper slivers are 1 to 3
+$bg = $before.GetPixel([int]($cw * 0.5), [int]($ch * 0.45))
 Write-Host "background sample: R$($bg.R) G$($bg.G) B$($bg.B)"
-$best = $null
-for ($y = [int]($before.Height * 0.55); $y -lt $before.Height - 4; $y += 2) {
-  $run = 0; $runStart = 0; $bestRunOnRow = 0; $bestStart = 0
-  for ($x = 0; $x -lt $before.Width; $x++) {
-    $p = $before.GetPixel($x, $y)
+
+function LongestRun($bmp, $y, $bg) {
+  $run = 0; $start = 0; $bestRun = 0; $bestStart = 0
+  for ($x = 0; $x -lt $bmp.Width; $x++) {
+    $p = $bmp.GetPixel($x, $y)
     $isBg = ([Math]::Abs($p.R-$bg.R) -le 12 -and [Math]::Abs($p.G-$bg.G) -le 12 -and [Math]::Abs($p.B-$bg.B) -le 12)
-    if (-not $isBg) { if ($run -eq 0) { $runStart = $x }; $run++ }
-    else { if ($run -gt $bestRunOnRow) { $bestRunOnRow = $run; $bestStart = $runStart }; $run = 0 }
+    if (-not $isBg) { if ($run -eq 0) { $start = $x }; $run++ }
+    else { if ($run -gt $bestRun) { $bestRun = $run; $bestStart = $start }; $run = 0 }
   }
-  if ($run -gt $bestRunOnRow) { $bestRunOnRow = $run; $bestStart = $runStart }
-  if ($bestRunOnRow -gt ($before.Width * 0.5) -and ($null -eq $best -or $bestRunOnRow -gt $best.Run)) {
-    $best = [pscustomobject]@{ Y = $y; Run = $bestRunOnRow; Start = $bestStart }
+  if ($run -gt $bestRun) { $bestRun = $run; $bestStart = $start }
+  return @($bestRun, $bestStart)
+}
+
+$blocks = @(); $curTop = -1; $curRuns = @(); $curStarts = @()
+for ($y = [int]($ch * 0.5); $y -lt $ch; $y++) {
+  $r = LongestRun $before $y $bg
+  if ($r[0] -ge $MIN_RUN) {
+    if ($curTop -lt 0) { $curTop = $y; $curRuns = @(); $curStarts = @() }
+    $curRuns += $r[0]; $curStarts += $r[1]
+  } elseif ($curTop -ge 0) {
+    if (($y - $curTop) -ge $MIN_ROWS) {
+      $blocks += [pscustomobject]@{ Top=$curTop; Bottom=$y; Width=($curRuns | Measure-Object -Maximum).Maximum; Start=($curStarts | Measure-Object -Minimum).Minimum }
+    }
+    $curTop = -1
   }
 }
-if (-not $best) {
-  Write-Host "::error::No primary button found. Nothing in the lower half of the window is a wide block of colour distinct from the background, so there is nothing a user could press."
+if ($curTop -ge 0 -and ($ch - $curTop) -ge $MIN_ROWS) {
+  $blocks += [pscustomobject]@{ Top=$curTop; Bottom=$ch; Width=($curRuns | Measure-Object -Maximum).Maximum; Start=($curStarts | Measure-Object -Minimum).Minimum }
+}
+$blocks | ForEach-Object { Write-Host "  candidate block: rows $($_.Top)..$($_.Bottom) ($($_.Bottom-$_.Top)px tall), $($_.Width)px wide, starting x=$($_.Start)" }
+
+# The primary action is the lowest such block: onboarding puts it in the footer.
+$btn = $blocks | Sort-Object Top -Descending | Select-Object -First 1
+if (-not $btn) {
+  Write-Host "::error::No primary button found. Nothing in the lower half of the window is a block of colour at least ${MIN_RUN}px wide and ${MIN_ROWS}px tall, so there is nothing a user could press."
   exit 1
 }
-$btnX = $r.Left + $best.Start + [int]($best.Run / 2)
-$btnY = $r.Top + $best.Y
-Write-Host "primary button: row y=$($best.Y), width $($best.Run)px, clicking screen ($btnX,$btnY)"
+$btnX = $origin.X + $btn.Start + [int]($btn.Width / 2)
+$btnY = $origin.Y + [int](($btn.Top + $btn.Bottom) / 2)
+Write-Host "primary button: rows $($btn.Top)..$($btn.Bottom), $($btn.Width)px wide. Clicking screen ($btnX,$btnY)"
 
-# ── Negative control, before trusting any positive result ────────────────────
-# Empty background well above the button. If clicking here changes the screen, the screen is
-# not stable and the positive test below would prove nothing.
-$controlX = $r.Left + [int](($r.Right-$r.Left) * 0.08)
-$controlY = $r.Top + [int](($r.Bottom-$r.Top) * 0.75)
+# ── Negative control ─────────────────────────────────────────────────────────
+# Empty background, well clear of the button block found above.
+$controlX = $origin.X + [int]($cw * 0.06)
+$controlY = $origin.Y + [int](($btn.Top) * 0.6)
 Write-Host "negative control: clicking empty background at ($controlX,$controlY)"
 Click $controlX $controlY
 $afterControl = Grab $rect
 $afterControl.Save("$OutDir/02-after-control-click.png")
 $controlDiff = DiffFraction $before $afterControl
-Write-Host ("control diff: {0:P3} of sampled pixels" -f $controlDiff)
+Write-Host ("control diff: {0:P3}" -f $controlDiff)
 if ($controlDiff -gt 0.002) {
-  Write-Host "::error::Clicking empty background changed the screen. Something is animating or repainting, so a pixel comparison cannot tell a live button from a dead one here. Not reporting a result from an unreliable measurement."
+  Write-Host "::error::Clicking empty background changed the screen. Something is animating or repainting, so a pixel comparison cannot tell a live button from a dead one here. Not reporting a result from a measurement that cannot support it."
   exit 1
 }
 
@@ -145,10 +186,10 @@ Click $btnX $btnY
 $after = Grab $rect
 $after.Save("$OutDir/03-after-primary-click.png")
 $diff = DiffFraction $afterControl $after
-Write-Host ("primary click diff: {0:P3} of sampled pixels" -f $diff)
+Write-Host ("primary click diff: {0:P3}" -f $diff)
 
 if ($diff -lt 0.02) {
-  Write-Host "::error::The primary button did nothing. The screen is unchanged after a real mouse press on it, which is the defect that failed Microsoft Store certification twice on the other app. Compare 02-after-control-click.png with 03-after-primary-click.png."
+  Write-Host "::error::The primary button did nothing. The screen is unchanged after a real mouse press on it. Compare 02-after-control-click.png with 03-after-primary-click.png."
   exit 1
 }
 Write-Host "The primary button is live: a real click advanced the UI."
