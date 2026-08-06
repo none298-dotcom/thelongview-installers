@@ -62,10 +62,18 @@ function Grab($rect) {
 
 # Fraction of sampled pixels differing beyond a small per channel tolerance. The tolerance
 # absorbs subpixel text antialiasing. It does not absorb a screen that actually changed.
-function DiffFraction($a, $b) {
+#
+# ExcludeTop/ExcludeBottom skip a band of rows. That exists because of a false pass: a build
+# with the Begin handler stubbed to {} was measured as 2.874% changed and reported as alive.
+# The button block is 464x52 in a 1084x741 client area, which is 3.0% of it. The entire
+# "change" was the button drawing its own hover state, because the mouse was parked on it.
+# Nothing had happened; the app had merely noticed the pointer. So the button's own rows are
+# excluded and the question becomes the right one: did anything change ELSEWHERE.
+function DiffFraction($a, $b, $ExcludeTop = -1, $ExcludeBottom = -1) {
   if ($a.Width -ne $b.Width -or $a.Height -ne $b.Height) { return 1.0 }
   $differing = 0; $total = 0
   for ($y = 0; $y -lt $a.Height; $y += 3) {
+    if ($ExcludeTop -ge 0 -and $y -ge $ExcludeTop -and $y -le $ExcludeBottom) { continue }
     for ($x = 0; $x -lt $a.Width; $x += 3) {
       $total++
       $p = $a.GetPixel($x, $y); $q = $b.GetPixel($x, $y)
@@ -81,6 +89,9 @@ function Click($x, $y) {
   [Win32]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero)   # left down
   Start-Sleep -Milliseconds 60
   [Win32]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero)   # left up
+  # Park the pointer away from everything before anything is measured, so a lingering hover or
+  # pressed style is not mistaken for the app having done something. See DiffFraction.
+  [Win32]::SetCursorPos(2, 2) | Out-Null
   Start-Sleep -Milliseconds $SettleMs
 }
 
@@ -185,11 +196,17 @@ if ($controlDiff -gt 0.002) {
 Click $btnX $btnY
 $after = Grab $rect
 $after.Save("$OutDir/03-after-primary-click.png")
-$diff = DiffFraction $afterControl $after
-Write-Host ("primary click diff: {0:P3}" -f $diff)
 
-if ($diff -lt 0.02) {
-  Write-Host "::error::The primary button did nothing. The screen is unchanged after a real mouse press on it. Compare 02-after-control-click.png with 03-after-primary-click.png."
+# Measured with the button's own rows excluded, so the answer is about the REST of the screen.
+# A live primary button navigates: the heading, the body copy and the controls all change. A
+# dead one leaves everything outside itself exactly as it was.
+$diff = DiffFraction $afterControl $after $btn.Top $btn.Bottom
+$withButton = DiffFraction $afterControl $after
+Write-Host ("primary click diff, excluding the button's own rows: {0:P3}" -f $diff)
+Write-Host ("  for reference, including them: {0:P3}" -f $withButton)
+
+if ($diff -lt 0.01) {
+  Write-Host "::error::The primary button did nothing. Outside the button itself, the screen is unchanged after a real mouse press on it, so nothing was navigated to and no state changed. Compare 02-after-control-click.png with 03-after-primary-click.png."
   exit 1
 }
-Write-Host "The primary button is live: a real click advanced the UI."
+Write-Host "The primary button is live: a real click changed the screen beyond the button itself."
