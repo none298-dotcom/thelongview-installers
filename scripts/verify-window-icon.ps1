@@ -20,10 +20,26 @@
 #
 # Both icons are also saved as artifacts, because the eye is the final authority here.
 
+# WHAT IS COMPARED, AND WHY NOT THE OBVIOUS THINGS
+# Not pixel by pixel. The window icon comes back as a 16x16 that Windows scales up, drawn small
+# inside its frame, while the EXE icon is a crisp full bleed 32x32. Identical artwork through
+# those two paths measured 44.7 mean per channel difference, against 64.8 for the actual Java
+# placeholder. Real separation, but far too little headroom to sit a threshold in.
+#
+# Not a structural hash either. That was tried and came out BACKWARDS: 53 of 64 bits differing
+# for the correct icon versus 38 for the wrong one, because the padding difference wrecks shape
+# agreement even when the image is the same. Had it been trusted, it would have failed the good
+# build and passed the bad one.
+#
+# What does separate them is the average colour of the artwork itself, ignoring the padding:
+# 15.7 for the correct icon, 39.7 for the Java placeholder. The app mark is warm cream and gold,
+# the placeholder is grey and blue, and scaling does not change that.
 param(
   [Parameter(Mandatory=$true)][string]$ExePath,
   [string]$OutDir = "artifacts",
-  [int]$MaxMeanDiff = 40
+  # Sits between the two measured cases with room on both sides. Both numbers come from real
+  # runs, not from judgement: 15.7 correct, 39.7 wrong.
+  [int]$MaxMeanDiff = 26
 )
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms
@@ -78,15 +94,33 @@ $windowIcon.Save("$OutDir/icon-window.png")
 $exeIcon = Normalise ([System.Drawing.Icon]::ExtractAssociatedIcon($ExePath).ToBitmap())
 $exeIcon.Save("$OutDir/icon-exe.png")
 
-$sum = 0
-for ($y = 0; $y -lt 32; $y++) {
-  for ($x = 0; $x -lt 32; $x++) {
-    $p = $windowIcon.GetPixel($x, $y); $q = $exeIcon.GetPixel($x, $y)
-    $sum += [Math]::Abs($p.R-$q.R) + [Math]::Abs($p.G-$q.G) + [Math]::Abs($p.B-$q.B)
+# Average colour of the artwork only. Near white pixels are the flattened background and the
+# padding around a small icon, and including them would just measure how much padding there is.
+function ArtworkMeanColour($bmp) {
+  $r = 0; $g = 0; $b = 0; $n = 0
+  for ($y = 0; $y -lt 32; $y++) {
+    for ($x = 0; $x -lt 32; $x++) {
+      $p = $bmp.GetPixel($x, $y)
+      if ($p.R -gt 245 -and $p.G -gt 245 -and $p.B -gt 245) { continue }
+      $r += $p.R; $g += $p.G; $b += $p.B; $n++
+    }
   }
+  if ($n -eq 0) { return $null }
+  return @([int]($r/$n), [int]($g/$n), [int]($b/$n), $n)
 }
-$mean = $sum / (32.0 * 32.0 * 3.0)
-Write-Host ("mean per channel difference, window icon vs EXE icon: {0:N1} (fails above {1})" -f $mean, $MaxMeanDiff)
+
+$wc = ArtworkMeanColour $windowIcon
+$ec = ArtworkMeanColour $exeIcon
+if ($null -eq $wc) {
+  Write-Host "::error::The window icon is blank. Nothing is drawn in the title bar at all."
+  exit 1
+}
+if ($null -eq $ec) { throw "The EXE icon is blank, so there is nothing to compare against" }
+
+Write-Host "window icon artwork: R$($wc[0]) G$($wc[1]) B$($wc[2]) over $($wc[3]) px"
+Write-Host "EXE icon artwork:    R$($ec[0]) G$($ec[1]) B$($ec[2]) over $($ec[3]) px"
+$mean = ([Math]::Abs($wc[0]-$ec[0]) + [Math]::Abs($wc[1]-$ec[1]) + [Math]::Abs($wc[2]-$ec[2])) / 3.0
+Write-Host ("artwork colour difference: {0:N1} (fails above {1}; measured 15.7 correct, 39.7 for the Java placeholder)" -f $mean, $MaxMeanDiff)
 
 if ($mean -gt $MaxMeanDiff) {
   Write-Host "::error::The title bar icon is not the app's icon. Compare icon-window.png with icon-exe.png in the artifacts. This is what shipped as the stock Java placeholder, and it is visible to a store reviewer in the first screenshot they take."
