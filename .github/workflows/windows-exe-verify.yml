@@ -1,0 +1,254 @@
+name: Build and verify Windows EXE
+
+# Builds the jpackage EXE on a real Windows runner, installs it exactly as a
+# Microsoft Store certifier does, and then asserts the things certification
+# actually checks. Modelled on MyLinedChart's smoke-test-windows-installed.yml,
+# whose own header records why it exists:
+#
+#   "still alive" is not "works". Microsoft rejected that app's Store submission
+#   three times; twice the cause was a button that did nothing at all, and every
+#   check up to that point only proved the process launches.
+#
+# So this workflow is built to fail on the things that were historically wrong,
+# not to go green on the things that were always right.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# THREE DIFFERENCES FROM MyLinedChart, all of which change the commands
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. INSTALLER TYPE. MyLinedChart ships an NSIS installer, silent flag `/S`
+#    (uppercase, case sensitive; lowercase opens the interactive installer and
+#    hangs the job). This app ships a jpackage EXE, which is a WiX **Burn
+#    bootstrapper** wrapping an MSI. Burn's silent flag is `/quiet`, and `/S`
+#    means nothing to it. Copying `/S` across would hang here for a different
+#    reason than it would there.
+# 2. UI TOOLKIT. MyLinedChart is Electron, so it can be driven over the Chrome
+#    DevTools Protocol on --remote-debugging-port. This is Compose Desktop:
+#    Skia-rendered, no Chromium, no CDP. Clicking has to go through Windows UI
+#    Automation instead, which is why the UIA step below is written as an
+#    experiment that reports rather than a check that is assumed to work.
+# 3. REPO LAYOUT. This repo is public and holds no application source. That is
+#    not tidiness, it is the only way the job runs at all: the first attempt put
+#    this workflow in the private source repo and every job died in three
+#    seconds, before a runner was even assigned, with
+#
+#      "The job was not started because recent account payments have failed or
+#       your spending limit needs to be increased."
+#
+#    Actions is free on public repos and metered on private ones, which is
+#    exactly why MyLinedChart has a separate installers repo. Source is fetched
+#    into the ephemeral workspace with a READ ONLY deploy key scoped to the one
+#    private repo (narrower than MyLinedChart's account-level PAT), and it never
+#    lands in this repo. Only finished artifacts do.
+
+on:
+  workflow_dispatch:
+    inputs:
+      break_per_user_install:
+        description: "Set true to build a DELIBERATELY BROKEN per-user installer, to prove the certification assertions actually go red. Never true for a real build."
+        type: boolean
+        default: false
+      wait_seconds:
+        description: "How long to let the installed app run before judging it"
+        default: "40"
+      source_ref:
+        description: "Branch or commit sha of thelongview-app to build"
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    runs-on: windows-latest
+    steps:
+      # The source is NOT in this repo. It is fetched here into the runner's
+      # workspace, which is destroyed with the VM, using a deploy key that has
+      # read access to that one private repo and nothing else.
+      - name: Check out the private source
+        uses: actions/checkout@v4
+        with:
+          repository: none298-dotcom/thelongview-app
+          ref: ${{ inputs.source_ref }}
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+
+      - name: Record exactly which commit is being verified
+        shell: pwsh
+        run: |
+          # Provenance. A green run against an unknown commit proves nothing,
+          # so the sha goes in the log and in the artifact bundle.
+          $sha = git rev-parse HEAD
+          Write-Host "verifying thelongview-app @ $sha"
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          "source_repo: none298-dotcom/thelongview-app`nsource_ref: ${{ inputs.source_ref }}`nsource_sha: $sha`nbroken_on_purpose: ${{ inputs.break_per_user_install }}" |
+            Out-File artifacts/provenance.txt
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+        id: src
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # The point of this input is the owner's rule: a new test proves nothing
+      # until it goes RED on the known-broken input. perUserInstall = true is
+      # precisely what failed MyLinedChart certification twice, so flipping it
+      # here must make the two assertions below fail, loudly and by name.
+      - name: Optionally break the install scope, to prove the assertions bite
+        if: ${{ inputs.break_per_user_install }}
+        shell: pwsh
+        run: |
+          $f = "android/desktop/build.gradle.kts"
+          (Get-Content $f -Raw).Replace("perUserInstall = false", "perUserInstall = true") | Set-Content $f
+          Write-Host "::warning::Built with perUserInstall = true ON PURPOSE. The certification assertions below MUST fail."
+
+      - name: Build the EXE
+        working-directory: android
+        shell: pwsh
+        run: ./gradlew.bat :desktop:packageExe --no-daemon
+
+      - name: Find the installer
+        id: find
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path android/desktop/build/compose/binaries -Recurse -Filter *.exe |
+                 Select-Object -First 1
+          if (-not $exe) { throw "No .exe produced" }
+          Write-Host "installer: $($exe.FullName)  ($([int]($exe.Length/1MB)) MB)"
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Silent install, exactly as a certifier does
+        shell: pwsh
+        run: |
+          # /quiet, not /S. This is a WiX Burn bundle, see the header.
+          $p = Start-Process -FilePath "${{ steps.find.outputs.path }}" -ArgumentList '/quiet' -PassThru -Wait
+          Write-Host "installer exit code: $($p.ExitCode)"
+          # 0 = installed, 3010 = installed, reboot required. Both are success.
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+            throw "Silent install failed with exit code $($p.ExitCode)"
+          }
+
+      # ── The two things certification actually checks ──────────────────────
+      - name: Assert an All Users Start Menu shortcut (policy 10.1.2.10)
+        shell: pwsh
+        run: |
+          $allUsers = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
+          $perUser  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+          $found = @()
+          foreach ($r in @($allUsers, $perUser)) {
+            if (Test-Path $r) { $found += Get-ChildItem $r -Recurse -Filter '*Long View*.lnk' -ErrorAction SilentlyContinue }
+          }
+          if (-not $found) {
+            Write-Host "::error::No Start Menu shortcut anywhere. This is certification 10.1.2.10, no accessible method of being launched."
+            exit 1
+          }
+          $found | ForEach-Object { Write-Host "shortcut: $($_.FullName)" }
+          if (-not ($found | Where-Object { $_.FullName -like "$env:ProgramData*" })) {
+            Write-Host "::error::Shortcut exists ONLY under the installing user's profile. That is the per-user install that failed certification 10.1.2.10: a certifier installs elevated then inspects as a normal user and sees nothing."
+            exit 1
+          }
+
+      - name: Assert an HKLM Add or Remove Programs entry (policy 10.2.7)
+        shell: pwsh
+        run: |
+          $keys = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          )
+          $entry = $null
+          foreach ($k in $keys) {
+            $entry = Get-ItemProperty $k -ErrorAction SilentlyContinue |
+                     Where-Object { $_.DisplayName -like '*Long View*' } | Select-Object -First 1
+            if ($entry) { break }
+          }
+          if (-not $entry) {
+            Write-Host "::error::No HKLM uninstall entry. This is certification 10.2.7, no entry in the Add or Remove Programs list."
+            Write-Host "--- checking HKCU, where a per-user install would have put it ---"
+            Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -EA SilentlyContinue |
+              Where-Object { $_.DisplayName -like '*Long View*' } | Select-Object DisplayName,UninstallString | Format-List
+            exit 1
+          }
+          Write-Host "ARP DisplayName:     $($entry.DisplayName)"
+          Write-Host "ARP UninstallString: $($entry.UninstallString)"
+          if (-not $entry.UninstallString) {
+            Write-Host "::error::Uninstall entry exists but has no UninstallString, so there is nothing for a user to run."
+            exit 1
+          }
+
+      - name: Launch the INSTALLED binary
+        id: launch
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "$env:ProgramFiles\The Long View" -Recurse -Filter '*.exe' -EA SilentlyContinue |
+                 Where-Object { $_.Name -notlike 'unins*' } | Select-Object -First 1
+          if (-not $exe) { throw "Installed binary not found under Program Files" }
+          Write-Host "launching: $($exe.FullName)"
+          $proc = Start-Process -FilePath $exe.FullName -PassThru
+          Start-Sleep -Seconds ${{ inputs.wait_seconds }}
+          if ($proc.HasExited) {
+            Write-Host "::error::The installed app exited with code $($proc.ExitCode). A jpackage build dies here when the modules() list omits something reached only at runtime, and nothing before this step can tell you."
+            exit 1
+          }
+          Write-Host "still running after ${{ inputs.wait_seconds }}s"
+          "pid=$($proc.Id)" >> $env:GITHUB_OUTPUT
+
+      # ── The part that is not just "it is alive" ───────────────────────────
+      # Compose Desktop exposes its semantics tree to Windows UI Automation, so
+      # a control can be found by name and invoked without pixel coordinates.
+      # Whether that actually works for this toolkit is the open question this
+      # step exists to answer, so it REPORTS rather than fails the build. Once
+      # it is proven, it becomes a hard assertion.
+      - name: EXPERIMENT, can UI Automation see the Compose tree
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+          $root = [System.Windows.Automation.AutomationElement]::RootElement
+          $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, "The Long View")
+          $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
+          if (-not $win) {
+            Write-Host "::warning::UIA could not find a top level window named 'The Long View'. Listing what it can see:"
+            $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition) |
+              ForEach-Object { Write-Host "  window: '$($_.Current.Name)'  class=$($_.Current.ClassName)" }
+            exit 1
+          }
+          Write-Host "UIA found the window: '$($win.Current.Name)'"
+          $all = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+          Write-Host "descendant elements exposed: $($all.Count)"
+          $all | Select-Object -First 40 | ForEach-Object {
+            Write-Host ("  {0,-22} name='{1}'" -f $_.Current.ControlType.ProgrammaticName, $_.Current.Name)
+          }
+          if ($all.Count -le 1) {
+            Write-Host "::warning::UIA sees the window but no inner elements. Compose is not exposing its semantics tree here, so clicking will need a different mechanism."
+          }
+
+      # Verify by LOOKING, per the owner's standing rule. This artifact is the
+      # point of the whole run: a human can open it and see whether the app
+      # rendered or is a blank window.
+      - name: Screenshot the desktop
+        if: always()
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $bmp.Save("artifacts/installed-app.png")
+          Write-Host "screenshot saved, $($b.Width)x$($b.Height)"
+
+      - name: Collect Windows Application event log
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Get-EventLog -LogName Application -Newest 40 -EA SilentlyContinue |
+            Select-Object TimeGenerated,EntryType,Source,Message |
+            Format-List | Out-File artifacts/application-log.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-verification
+          path: artifacts/
