@@ -401,6 +401,83 @@ jobs:
             Select-Object TimeGenerated,EntryType,Source,Message |
             Format-List | Out-File artifacts/application-log.txt
 
+      # ── Publish, and only if everything above passed ──────────────────────
+      # Deliberately last, and gated on success(). A URL handed over is a URL that will be
+      # pasted into Partner Center, so nothing that failed a check gets one. Skipped entirely
+      # for break_mode runs, whose whole purpose is to produce a broken installer.
+      - name: Publish the signed installer to a permanent URL
+        if: ${{ success() && inputs.break_mode == 'none' }}
+        id: publish
+        shell: pwsh
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+        run: |
+          $src = "${{ steps.find.outputs.path }}"
+          $version = [regex]::Match((Split-Path $src -Leaf), '(\d+\.\d+\.\d+)').Groups[1].Value
+          $sha = "${{ steps.src.outputs.sha }}"
+
+          # Keyed by commit sha, not version number. A version number gets reused during
+          # development and the URL must be immutable: Partner Center caches what it fetched,
+          # so the same URL quietly meaning something different later is the failure mode.
+          # No random suffix, so the URL is predictable, and overwrite left off, so publishing
+          # the same sha twice FAILS rather than silently replacing a package already submitted.
+          $pathname = "windows/$sha/TheLongView-Setup-$version.exe"
+          $clean = "$env:RUNNER_TEMP\TheLongView-Setup-$version.exe"
+          Copy-Item $src $clean   # the built name contains spaces; the URL should not
+
+          npx --yes vercel@latest blob put $clean --pathname $pathname --access public `
+            --add-random-suffix false --allow-overwrite false --content-type application/octet-stream 2>&1 |
+            Tee-Object -Variable out
+          $url = ([regex]::Match(($out -join "`n"), 'https://\S+\.exe')).Value
+          if (-not $url) { throw "No URL came back from the upload" }
+          Write-Host "url=$url"
+          "url=$url" >> $env:GITHUB_OUTPUT
+          $url | Out-File artifacts/package-url.txt
+
+      # A URL is only handed over once it has actually been fetched. Partner Center rejects a
+      # redirecting link, which is exactly why GitHub release links cannot be used, and a URL
+      # that serves different bytes than were verified above would make this whole run
+      # meaningless.
+      - name: Prove the URL is direct and serves the bytes that were verified
+        if: ${{ success() && inputs.break_mode == 'none' }}
+        shell: pwsh
+        run: |
+          $url = "${{ steps.publish.outputs.url }}"
+          $head = Invoke-WebRequest -Uri $url -Method Head -MaximumRedirection 0 -SkipHttpErrorCheck
+          Write-Host "HTTP $($head.StatusCode) $($head.StatusDescription)"
+          if ($head.StatusCode -ge 300 -and $head.StatusCode -lt 400) {
+            Write-Host "::error::The URL redirects (HTTP $($head.StatusCode) to $($head.Headers.Location)). Partner Center rejects redirecting package URLs."
+            exit 1
+          }
+          if ($head.StatusCode -ne 200) { throw "URL returned HTTP $($head.StatusCode)" }
+
+          $dl = "$env:RUNNER_TEMP\roundtrip.exe"
+          Invoke-WebRequest -Uri $url -OutFile $dl
+          $a = (Get-FileHash "${{ steps.find.outputs.path }}" -Algorithm SHA256).Hash
+          $b = (Get-FileHash $dl -Algorithm SHA256).Hash
+          Write-Host "built    SHA256: $a"
+          Write-Host "served   SHA256: $b"
+          if ($a -ne $b) { Write-Host "::error::The bytes at the URL are not the bytes that were built and verified."; exit 1 }
+
+          # The signature must survive the round trip too, since that is what a user downloads.
+          $sig = Get-AuthenticodeSignature $dl
+          Write-Host "downloaded file signature: $($sig.Status), signer $($sig.SignerCertificate.Subject)"
+          if ("${{ env.AZURE_CLIENT_ID }}" -ne "" -and $sig.Status -ne "Valid") {
+            Write-Host "::error::The downloaded installer is not validly signed."
+            exit 1
+          }
+          "`n$a  SHA256 of the published installer" | Out-File artifacts/package-url.txt -Append
+
+      - name: Say where the package is
+        if: ${{ success() && inputs.break_mode == 'none' }}
+        shell: pwsh
+        run: |
+          "## Windows package" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "Paste this into Partner Center:" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "``${{ steps.publish.outputs.url }}``" >> $env:GITHUB_STEP_SUMMARY
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
