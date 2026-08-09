@@ -57,6 +57,7 @@ on:
           - per_user_install   # shortcut lands only under APPDATA, must fail 10.1.2.10
           - remove_arp_entry   # delete the HKLM uninstall key, must fail 10.2.7
           - dead_button        # stub the welcome button's handler, must fail the click check
+          - deny_users_read    # strip Users read from the installed exe, must fail the standard-user check
       wait_seconds:
         description: "How long to let the installed app run before judging it"
         default: "40"
@@ -264,6 +265,24 @@ jobs:
               ForEach-Object { Write-Host "deleting $($_.PSPath)"; Remove-Item $_.PSPath -Recurse -Force; $removed++ }
           }
           if ($removed -eq 0) { throw "Nothing to delete, so this mutation would prove nothing" }
+
+      # per_user_install cannot prove the standard-user check bites: it fails certification, which
+      # throws, and every later step including that one is skipped. So this mutation leaves the
+      # install perfectly certifiable and breaks only the thing the standard-user check exists for:
+      # a shortcut in the right place, pointing at a binary an ordinary user is not allowed to read.
+      # Inheritance is broken on the file alone, so the directory stays traversable and the failure
+      # is "can see it, cannot open it" rather than "cannot find it".
+      - name: Deny Users read on the installed binary (break_mode only)
+        if: ${{ inputs.break_mode == 'deny_users_read' }}
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "$env:ProgramFiles\The Long View" -Recurse -Filter '*.exe' -EA SilentlyContinue |
+                 Where-Object { $_.Name -notlike 'unins*' } | Select-Object -First 1
+          if (-not $exe) { throw "Installed binary not found, so this mutation would prove nothing" }
+          Write-Host "removing Users read from $($exe.FullName)"
+          icacls $exe.FullName /inheritance:d | Out-Null
+          icacls $exe.FullName /remove:g "BUILTIN\Users" | Out-Null
+          icacls $exe.FullName
 
       # ── The two things certification actually checks ──────────────────────
       # Deliberately ONE step covering both policies. As two steps, the first

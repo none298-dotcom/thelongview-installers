@@ -26,9 +26,13 @@
 # and that user's ACL evaluation, which is the whole point.
 #
 # HOW TO SEE IT GO RED
-# `-f break_mode=per_user_install`. That installs into the administrator's profile, so the
-# standard user cannot reach the binary and every assertion below fails at once. Do that before
-# believing a green from this script.
+# `-f break_mode=deny_users_read`, and NOT per_user_install, which was the obvious choice and
+# proves nothing here: that mutation fails the certification step, which throws, and every step
+# after it including this one is skipped. A check that has only ever been skipped is a check
+# nobody has seen work.
+# deny_users_read leaves the install perfectly certifiable and breaks exactly what this script is
+# for: the shortcut is in the right place, points at the right binary, and an ordinary user is not
+# allowed to read it. Run it before believing a green from here.
 
 param(
     [Parameter(Mandatory = $true)][string]$ExePath,
