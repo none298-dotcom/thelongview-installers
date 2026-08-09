@@ -78,8 +78,9 @@ try {
     # The probe. Deliberately dumb: it looks, it records, it judges nothing. Every decision is
     # made by the caller, where the reasoning is readable.
     $probe = @'
+param([Parameter(Mandatory = $true)][string]$Exe, [Parameter(Mandatory = $true)][string]$Out)
 $result = [ordered]@{}
-$exe = $env:TLV_EXE
+$exe = $Exe
 $result.exePath = $exe
 $result.exeExists = Test-Path -LiteralPath $exe
 $result.exeReadable = $false
@@ -117,7 +118,7 @@ foreach ($s in $shortcuts) {
 
 $result.whoami = whoami
 $result.isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-$result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $env:TLV_OUT -Encoding UTF8
+$result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $Out -Encoding UTF8
 '@
     Set-Content -LiteralPath $probeScript -Value $probe -Encoding UTF8
 
@@ -128,14 +129,16 @@ $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $env:TLV_OUT -Encod
     $secure = ConvertTo-SecureString $password -AsPlainText -Force
     $credential = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\$userName", $secure)
 
-    # The environment does not survive the logon, so the two paths go through machine-scope
-    # variables the probe reads back.
-    [Environment]::SetEnvironmentVariable("TLV_EXE", $ExePath, "Machine")
-    [Environment]::SetEnvironmentVariable("TLV_OUT", $probeOutput, "Machine")
+    # ARGUMENTS, not environment variables. The first draft set them machine-scope and the probe
+    # saw nothing: a machine-scope variable does not enter the CURRENT process's environment, and
+    # Start-Process hands the child a copy of the current one. Arguments cross the logon boundary
+    # with no such subtlety.
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $probeScript + '"' +
+                 ' -Exe "' + $ExePath + '"' +
+                 ' -Out "' + $probeOutput + '"'
 
     Write-Host "running the probe as $userName"
-    $process = Start-Process -FilePath "powershell.exe" `
-        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $probeScript) `
+    $process = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments `
         -Credential $credential -PassThru `
         -RedirectStandardOutput $probeStdout -RedirectStandardError $probeStderr
     $process.WaitForExit(120000) | Out-Null
@@ -205,7 +208,5 @@ $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $env:TLV_OUT -Encod
     Write-Host "A standard, non-admin user can find and open this install."
 }
 finally {
-    [Environment]::SetEnvironmentVariable("TLV_EXE", $null, "Machine")
-    [Environment]::SetEnvironmentVariable("TLV_OUT", $null, "Machine")
     Remove-ProbeUser
 }
