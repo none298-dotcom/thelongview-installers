@@ -337,13 +337,6 @@ jobs:
           "pid=$($proc.Id)" >> $env:GITHUB_OUTPUT
           "exe=$($exe.FullName)" >> $env:GITHUB_OUTPUT
 
-      # Every other check on this runner is performed by an administrator, which is the one
-      # account for which a per-user install looks fine. This asks whether an ordinary user can
-      # use the thing, which is what a certifier does after installing. See the script's header.
-      - name: Prove a standard, non-admin user can find and open it
-        shell: pwsh
-        run: ./ci/scripts/verify-standard-user.ps1 -ExePath "${{ steps.launch.outputs.exe }}" -OutDir artifacts
-
       # The build shipped with the stock Java placeholder in its title bar and in Alt+Tab, and
       # the owner has failed store submissions over exactly that before. It was caught by a
       # human looking at a screenshot. It is checked here now.
@@ -395,6 +388,15 @@ jobs:
       # Verify by LOOKING, per the owner's standing rule. This artifact is the
       # point of the whole run: a human can open it and see whether the app
       # rendered or is a blank window.
+      # AFTER the click check, deliberately. It sat between the launch and the click at first, and
+      # the click check went red on a build that was fine: this step opens a process, that took the
+      # foreground away from the app, and the "real mouse press" then spent itself re-activating the
+      # window instead of pressing the button. The screenshots show the welcome screen still up.
+      # Nothing here needs the app running, so it goes last and cannot interfere with anything.
+      - name: Prove a standard, non-admin user can find and open it
+        shell: pwsh
+        run: ./ci/scripts/verify-standard-user.ps1 -ExePath "${{ steps.launch.outputs.exe }}" -OutDir artifacts
+
       - name: Screenshot the desktop
         if: always()
         shell: pwsh

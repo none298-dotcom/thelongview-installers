@@ -138,8 +138,12 @@ $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $Out -Encoding UTF8
                  ' -Out "' + $probeOutput + '"'
 
     Write-Host "running the probe as $userName"
+    # -NoNewWindow, or Start-Process opens a console on the interactive desktop and whatever was
+    # in front stops being in front. That cost a green once already; see the workflow step's
+    # comment. This step runs last now, but a check that disturbs the machine it is measuring is
+    # worth not writing twice.
     $process = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments `
-        -Credential $credential -PassThru `
+        -Credential $credential -PassThru -NoNewWindow `
         -RedirectStandardOutput $probeStdout -RedirectStandardError $probeStderr
     $process.WaitForExit(120000) | Out-Null
     Write-Host "probe exit code: $($process.ExitCode)"
