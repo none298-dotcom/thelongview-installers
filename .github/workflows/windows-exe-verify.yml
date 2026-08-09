@@ -337,6 +337,13 @@ jobs:
           "pid=$($proc.Id)" >> $env:GITHUB_OUTPUT
           "exe=$($exe.FullName)" >> $env:GITHUB_OUTPUT
 
+      # Every other check on this runner is performed by an administrator, which is the one
+      # account for which a per-user install looks fine. This asks whether an ordinary user can
+      # use the thing, which is what a certifier does after installing. See the script's header.
+      - name: Prove a standard, non-admin user can find and open it
+        shell: pwsh
+        run: ./ci/scripts/verify-standard-user.ps1 -ExePath "${{ steps.launch.outputs.exe }}" -OutDir artifacts
+
       # The build shipped with the stock Java placeholder in its title bar and in Alt+Tab, and
       # the owner has failed store submissions over exactly that before. It was caught by a
       # human looking at a screenshot. It is checked here now.
