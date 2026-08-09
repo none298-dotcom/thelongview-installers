@@ -462,7 +462,13 @@ jobs:
           $clean = "$env:RUNNER_TEMP\TheLongView-Setup-$version.exe"
           Copy-Item $src $clean   # the built name contains spaces; the URL should not
 
+          # --rw-token, explicitly. The CLI used to read BLOB_READ_WRITE_TOKEN from the
+          # environment; version 58 does not, and fails with "No existing credentials found.
+          # Please run `vercel login`" even though the token is right there. That surfaced on the
+          # first publish that mattered, which is the worst possible time to find it, so the token
+          # is now passed on the command line where the CLI cannot decide to stop looking for it.
           npx --yes vercel@latest blob put $clean --pathname $pathname --access public `
+            --rw-token $env:BLOB_READ_WRITE_TOKEN `
             --add-random-suffix false --allow-overwrite false --content-type application/octet-stream 2>&1 |
             Tee-Object -Variable out
           $url = ([regex]::Match(($out -join "`n"), 'https://\S+\.exe')).Value
