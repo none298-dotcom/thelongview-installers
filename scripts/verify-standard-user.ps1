@@ -39,8 +39,13 @@ $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 $userName = "tlvstduser"
-$probeScript = "C:\ProgramData\tlv-stduser-probe.ps1"
-$probeOutput = "C:\ProgramData\tlv-stduser-probe.json"
+# C:\Users\Public, not C:\ProgramData. The first draft used ProgramData and the probe never
+# produced a file: its root grants Users read and execute, not write, so a standard user cannot
+# drop a result there. Public grants Users modify by default, which is exactly the point of it.
+$probeScript = "C:\Users\Public\tlv-stduser-probe.ps1"
+$probeOutput = "C:\Users\Public\tlv-stduser-probe.json"
+$probeStdout = "C:\Users\Public\tlv-stduser-probe.out.txt"
+$probeStderr = "C:\Users\Public\tlv-stduser-probe.err.txt"
 $created = $false
 
 function Remove-ProbeUser {
@@ -48,7 +53,7 @@ function Remove-ProbeUser {
         Write-Host "cleaning up: removing $userName"
         net user $userName /delete 2>&1 | Out-Null
     }
-    Remove-Item $probeScript, $probeOutput -Force -ErrorAction SilentlyContinue
+    Remove-Item $probeScript, $probeOutput, $probeStdout, $probeStderr -Force -ErrorAction SilentlyContinue
 }
 
 try {
@@ -131,11 +136,22 @@ $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $env:TLV_OUT -Encod
     Write-Host "running the probe as $userName"
     $process = Start-Process -FilePath "powershell.exe" `
         -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $probeScript) `
-        -Credential $credential -PassThru -WindowStyle Hidden
+        -Credential $credential -PassThru `
+        -RedirectStandardOutput $probeStdout -RedirectStandardError $probeStderr
     $process.WaitForExit(120000) | Out-Null
+    Write-Host "probe exit code: $($process.ExitCode)"
+
+    # Printed BEFORE the existence check. The first version threw "no output" and said nothing
+    # else, which told whoever read it that something went wrong and nothing about what.
+    foreach ($pair in @(@("stdout", $probeStdout), @("stderr", $probeStderr))) {
+        if (Test-Path $pair[1]) {
+            $text = (Get-Content -LiteralPath $pair[1] -Raw)
+            if ($text -and $text.Trim()) { Write-Host "--- probe $($pair[0]) ---`n$text" }
+        }
+    }
 
     if (-not (Test-Path $probeOutput)) {
-        throw "The probe produced no output. It could not run as $userName at all, so nothing is proven either way."
+        throw "The probe produced no output, so nothing is proven either way. Its exit code and streams are above."
     }
 
     $probeResult = Get-Content -LiteralPath $probeOutput -Raw | ConvertFrom-Json
