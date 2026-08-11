@@ -252,6 +252,10 @@ jobs:
       # Deliberately BEFORE the install and publish steps: an updater that would reject its own
       # release is a reason not to ship the release.
       - name: Prove the in-app updater accepts this build and refuses everything else
+        # gradlew.bat lives in android/, not at the repo root. Same as "Build the EXE" above; the
+        # first version of this step omitted it and died with a command-not-found that reads like a
+        # test failure.
+        working-directory: android
         shell: pwsh
         env:
           TLV_SIGNED_INSTALLER: ${{ steps.find.outputs.path }}
@@ -259,8 +263,9 @@ jobs:
           if ("${{ env.AZURE_CLIENT_ID }}" -eq "") {
             Write-Host "::warning::Unsigned build, so the updater's publisher check cannot be proven here."
           }
-          ./gradlew.bat :desktop:test --tests "*WindowsInstallerTest*" --no-daemon -i 2>&1 |
-            Select-String -Pattern "WindowsInstallerTest|PASSED|FAILED|SKIPPED"
+          # NOT piped into Select-String. A pipeline's $LASTEXITCODE is the LAST command's, so
+          # filtering the output here would have made this step pass whatever gradle decided.
+          ./gradlew.bat :desktop:test --tests "*WindowsInstallerTest*" --no-daemon
           if ($LASTEXITCODE -ne 0) { throw "The updater would not accept our own signed installer" }
 
       - name: Silent install, exactly as a certifier does
