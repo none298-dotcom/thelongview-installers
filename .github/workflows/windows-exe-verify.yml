@@ -238,6 +238,31 @@ jobs:
             exit 1
           }
 
+      # ── The updater's own signature check, against this very installer ────
+      # The desktop app refuses to run any update it cannot prove we signed. That check asks
+      # Windows itself, so it cannot be exercised on the development Mac at all; on macOS the
+      # three tests below skip, and a green run there says nothing about them.
+      #
+      # Here they are real. The first proves a genuine build is accepted, which is the check
+      # failing closed on our own release; that exact mistake was made once already, with the
+      # wrong company name hardcoded, and it would have refused every update for ever without
+      # showing anybody anything. The third proves a validly signed program that is NOT ours is
+      # still refused, using one shipped with Windows.
+      #
+      # Deliberately BEFORE the install and publish steps: an updater that would reject its own
+      # release is a reason not to ship the release.
+      - name: Prove the in-app updater accepts this build and refuses everything else
+        shell: pwsh
+        env:
+          TLV_SIGNED_INSTALLER: ${{ steps.find.outputs.path }}
+        run: |
+          if ("${{ env.AZURE_CLIENT_ID }}" -eq "") {
+            Write-Host "::warning::Unsigned build, so the updater's publisher check cannot be proven here."
+          }
+          ./gradlew.bat :desktop:test --tests "*WindowsInstallerTest*" --no-daemon -i 2>&1 |
+            Select-String -Pattern "WindowsInstallerTest|PASSED|FAILED|SKIPPED"
+          if ($LASTEXITCODE -ne 0) { throw "The updater would not accept our own signed installer" }
+
       - name: Silent install, exactly as a certifier does
         shell: pwsh
         run: |
