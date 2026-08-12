@@ -63,7 +63,7 @@ on:
           - per_user_install   # OBSOLETE: per-user is the correct scope now, this no longer fails
           - remove_arp_entry   # delete the HKLM uninstall key, must fail 10.2.7
           - dead_button        # stub the welcome button's handler, must fail the click check
-          - deny_users_read    # strip Users read from the installed exe, must fail the standard-user check
+          - deny_users_read    # OBSOLETE: only fed the retired cross-account standard-user check
       wait_seconds:
         description: "How long to let the installed app run before judging it"
         default: "40"
@@ -521,17 +521,22 @@ jobs:
         shell: pwsh
         run: ./ci/scripts/verify-ui.ps1 -OutDir artifacts
 
-      # Verify by LOOKING, per the owner's standing rule. This artifact is the
-      # point of the whole run: a human can open it and see whether the app
-      # rendered or is a blank window.
-      # AFTER the click check, deliberately. It sat between the launch and the click at first, and
-      # the click check went red on a build that was fine: this step opens a process, that took the
-      # foreground away from the app, and the "real mouse press" then spent itself re-activating the
-      # window instead of pressing the button. The screenshots show the welcome screen still up.
-      # Nothing here needs the app running, so it goes last and cannot interfere with anything.
-      - name: Prove a standard, non-admin user can find and open it
-        shell: pwsh
-        run: ./ci/scripts/verify-standard-user.ps1 -ExePath "${{ steps.launch.outputs.exe }}" -OutDir artifacts
+      # RETIRED 2026-08-12. This step created a SEPARATE standard user (tlvstduser) and asserted that
+      # THAT account could see and open what runneradmin had installed. Its own header stated the
+      # model it tested: "install elevated, then come back as an ordinary user and try to use the
+      # thing." That model is the disproven one. Two real Microsoft rejections (this app under 10.3.4
+      # for a per-machine install, and sibling Reveal the Dream, same publisher, with the Windows
+      # Installer log) established that the certifier installs UNELEVATED and inspects AS THE SAME
+      # USER who installed. A correct per-user install lands in the installing user's own profile and
+      # is therefore invisible to any OTHER account BY DESIGN, so this cross-account probe fails every
+      # correct build (it did, here) while passing nothing Microsoft actually checks. It also looked
+      # for the shortcut only under %ProgramData% (All Users), the same per-machine assumption.
+      #
+      # The thing that IS certified, the installing user can find and launch it, is already proven by
+      # "Launch the INSTALLED binary" and "Click the primary button", both of which run as the
+      # installing user. RTD's proven build-and-verify-windows.yml has no cross-account gate either.
+      # scripts/verify-standard-user.ps1 and the deny_users_read break_mode are left in the repo but
+      # unused; both existed only to feed this retired check.
 
       - name: Screenshot the desktop
         if: always()
