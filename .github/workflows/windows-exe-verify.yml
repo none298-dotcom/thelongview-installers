@@ -44,17 +44,23 @@ on:
   workflow_dispatch:
     inputs:
       # Each mode injects a DIFFERENT known defect, because one defect does not
-      # exercise every assertion. per_user_install was expected to fail both
-      # certification checks and only failed 10.1.2.10: jpackage still wrote the
-      # HKLM uninstall entry, so 10.2.7 passed and stayed unproven. It needs its
-      # own mutation, which is what remove_arp_entry is.
+      # exercise every assertion.
+      #
+      # OBSOLETE: per_user_install. It flipped the build to per-user and expected 10.1.2.10 to go
+      # red, on the disproven theory that a certifier installs elevated and inspects as a normal
+      # user. Two real Microsoft rejections (this app on 2026-08-12 for PER-MACHINE, and sibling
+      # Reveal the Dream, same publisher, with the Windows Installer log) proved the certifier
+      # installs UNELEVATED, so per-user is the CORRECT shipping scope, not a defect. Injecting it
+      # now correctly PASSES. The mode is kept only so old dispatch links do not error; do not use it
+      # to "prove an assertion bites". The certification assertions are now scope-aware: they read
+      # perUserInstall from the source and check the scope-appropriate location.
       break_mode:
         description: "Inject a known defect, to prove an assertion actually goes red. Always 'none' for a real build."
         type: choice
         default: none
         options:
           - none
-          - per_user_install   # shortcut lands only under APPDATA, must fail 10.1.2.10
+          - per_user_install   # OBSOLETE: per-user is the correct scope now, this no longer fails
           - remove_arp_entry   # delete the HKLM uninstall key, must fail 10.2.7
           - dead_button        # stub the welcome button's handler, must fail the click check
           - deny_users_read    # strip Users read from the installed exe, must fail the standard-user check
@@ -317,8 +323,15 @@ jobs:
         if: ${{ inputs.break_mode == 'deny_users_read' }}
         shell: pwsh
         run: |
-          $exe = Get-ChildItem "$env:ProgramFiles\The Long View" -Recurse -Filter '*.exe' -EA SilentlyContinue |
-                 Where-Object { $_.Name -notlike 'unins*' } | Select-Object -First 1
+          # Both scopes: a per-user install lands under %LOCALAPPDATA%, per-machine under Program Files.
+          $roots = @("$env:LOCALAPPDATA\The Long View", "$env:ProgramFiles\The Long View", "${env:ProgramFiles(x86)}\The Long View") |
+                   Where-Object { $_ -and (Test-Path $_) }
+          $exe = $null
+          foreach ($r in $roots) {
+            $exe = Get-ChildItem $r -Recurse -Filter '*.exe' -EA SilentlyContinue |
+                   Where-Object { $_.Name -notlike 'unins*' } | Select-Object -First 1
+            if ($exe) { break }
+          }
           if (-not $exe) { throw "Installed binary not found, so this mutation would prove nothing" }
           Write-Host "removing Users read from $($exe.FullName)"
           icacls $exe.FullName /inheritance:d | Out-Null
@@ -334,24 +347,43 @@ jobs:
         shell: pwsh
         run: |
           $failures = 0
-          $allUsers = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
-          $perUser  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
-          $found = @()
-          foreach ($r in @($allUsers, $perUser)) {
-            if (Test-Path $r) { $found += Get-ChildItem $r -Recurse -Filter '*Long View*.lnk' -ErrorAction SilentlyContinue }
+
+          # SCOPE-AWARE, corrected 2026-08-12. The old version of this block failed 10.1.2.10
+          # whenever the shortcut was "ONLY under the installing user's profile", on the theory that
+          # a certifier installs elevated and inspects as a different, normal user. That theory is
+          # DISPROVEN: The Long View was rejected under 10.3.4 on 2026-08-12 for a PER-MACHINE install
+          # (exit 1603 / MSI 1625 "no credential elevation is possible"), and sibling app Reveal the
+          # Dream, on the SAME publisher account, proved with the Windows Installer log that the
+          # certifier installs UNELEVATED, as the ordinary user. Per-user is therefore the ONLY scope
+          # that can install in this channel, and its shortcut correctly lands in that user's own
+          # Start Menu. So the assertion is not "All Users" or "per-user", it is: the shortcut is
+          # where the DECLARED scope puts it, and the installing user can see it. The declared scope
+          # is read from the source, never inferred from a registry hive. See RTD's
+          # build-and-verify-windows.yml, which this is ported from.
+          $gradle = Get-Content "android/desktop/build.gradle.kts" -Raw
+          if ($gradle -notmatch 'perUserInstall\s*=\s*(true|false)') {
+            throw "Could not read perUserInstall from android/desktop/build.gradle.kts. This gate must never assume a scope."
           }
+          $perUserInstall = $Matches[1] -eq 'true'
+          $startMenu = if ($perUserInstall) { "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" }
+                       else                 { "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" }
+          $scopeName = if ($perUserInstall) { 'per-user' } else { 'per-machine' }
+          Write-Host "Declared install scope: $scopeName"
+          $found = @()
+          if (Test-Path $startMenu) { $found += Get-ChildItem $startMenu -Recurse -Filter '*Long View*.lnk' -ErrorAction SilentlyContinue }
           $found | ForEach-Object { Write-Host "shortcut: $($_.FullName)" }
           if (-not $found) {
-            Write-Host "::error::10.1.2.10 FAILED. No Start Menu shortcut anywhere, so there is no accessible method of being launched."
+            Write-Host "::error::10.1.2.10 FAILED. No Start Menu shortcut under $startMenu, where a $scopeName install must put it, so there is no accessible method of being launched."
             $failures++
           }
-          elseif (-not ($found | Where-Object { $_.FullName -like "$env:ProgramData*" })) {
-            Write-Host "::error::10.1.2.10 FAILED. The shortcut exists ONLY under the installing user's profile. That is the per-user install that failed certification twice: a certifier installs elevated, then inspects as a normal user and sees nothing."
-            $failures++
-          }
-          else { Write-Host "10.1.2.10 ok, All Users shortcut present" }
+          else { Write-Host "10.1.2.10 ok, $scopeName shortcut present" }
 
+          # Either hive. jpackage writes the ARP entry to HKLM even for a per-user install when an
+          # ADMINISTRATOR runs the installer, which is exactly what this runner does, so demanding
+          # one specific hive would fail a correct build. What 10.2.7 actually asks is that the entry
+          # exists somewhere in Add/Remove Programs with a working UninstallString.
           $keys = @(
+            'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
             'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
           )
@@ -362,10 +394,7 @@ jobs:
             if ($entry) { break }
           }
           if (-not $entry) {
-            Write-Host "::error::10.2.7 FAILED. No HKLM uninstall entry, so nothing appears in the Add or Remove Programs list."
-            Write-Host "--- checking HKCU, where a per-user install would have put it instead ---"
-            Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -EA SilentlyContinue |
-              Where-Object { $_.DisplayName -like '*Long View*' } | Select-Object DisplayName,UninstallString | Format-List
+            Write-Host "::error::10.2.7 FAILED. No uninstall entry in any hive (HKCU or HKLM), so nothing appears in the Add or Remove Programs list."
             $failures++
           }
           elseif (-not $entry.UninstallString) {
@@ -421,9 +450,18 @@ jobs:
         id: launch
         shell: pwsh
         run: |
-          $exe = Get-ChildItem "$env:ProgramFiles\The Long View" -Recurse -Filter '*.exe' -EA SilentlyContinue |
-                 Where-Object { $_.Name -notlike 'unins*' } | Select-Object -First 1
-          if (-not $exe) { throw "Installed binary not found under Program Files" }
+          # In BOTH places an install can land: a per-user install puts the app under %LOCALAPPDATA%,
+          # a per-machine one under Program Files. Looking in only one made the whole downstream chain
+          # depend on a packaging choice it should not care about, and is what broke the per-user build.
+          $roots = @("$env:LOCALAPPDATA\The Long View", "$env:ProgramFiles\The Long View", "${env:ProgramFiles(x86)}\The Long View") |
+                   Where-Object { $_ -and (Test-Path $_) }
+          $exe = $null
+          foreach ($r in $roots) {
+            $exe = Get-ChildItem $r -Recurse -Filter '*.exe' -EA SilentlyContinue |
+                   Where-Object { $_.Name -notlike 'unins*' } | Select-Object -First 1
+            if ($exe) { break }
+          }
+          if (-not $exe) { throw "Installed binary not found under %LOCALAPPDATA% or Program Files" }
           Write-Host "launching: $($exe.FullName)"
           $proc = Start-Process -FilePath $exe.FullName -PassThru
           Start-Sleep -Seconds ${{ inputs.wait_seconds }}
