@@ -569,7 +569,11 @@ jobs:
         id: publish
         shell: pwsh
         env:
-          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          # Not secrets: the account id and bucket name are in every published URL anyway.
+          R2_ACCOUNT_ID: a20a6afef6c2b00fa8406e8755103537
+          R2_BUCKET: thelongview-downloads
         run: |
           $src = "${{ steps.find.outputs.path }}"
           $version = [regex]::Match((Split-Path $src -Leaf), '(\d+\.\d+\.\d+)').Groups[1].Value
@@ -578,19 +582,22 @@ jobs:
           # Keyed by commit sha, not version number. A version number gets reused during
           # development and the URL must be immutable: Partner Center caches what it fetched,
           # so the same URL quietly meaning something different later is the failure mode.
-          # No random suffix, so the URL is predictable, and overwrite left off, so publishing
-          # the same sha twice FAILS rather than silently replacing a package already submitted.
+          # r2-put refuses to overwrite, so publishing the same sha twice FAILS rather than
+          # silently replacing a package already submitted.
           $pathname = "windows/$sha/TheLongView-Setup-$version.exe"
           $clean = "$env:RUNNER_TEMP\TheLongView-Setup-$version.exe"
           Copy-Item $src $clean   # the built name contains spaces; the URL should not
 
-          # The SDK, not the CLI. `vercel blob put` demands an account login for the CLI itself
-          # even with the blob token supplied, and this workflow deliberately has no
-          # human-shaped credential. See ci/scripts/blob-put.mjs.
-          npm install --no-save --silent "@vercel/blob@1"
-          node ci/scripts/blob-put.mjs $clean $pathname 2>&1 | Tee-Object -Variable out
-          $url = ([regex]::Match(($out -join "`n"), 'https://\S+\.exe')).Value
-          if (-not $url) { throw "No URL came back from the upload" }
+          # Cloudflare R2 over the S3 API, replacing Vercel Blob: R2 charges nothing for egress,
+          # and serving an installer is almost all egress. The AWS SDK, not a CLI, so no
+          # human-shaped credential is needed. See ci/scripts/r2-put.mjs.
+          npm install --no-save --silent "@aws-sdk/client-s3@3"
+          node ci/scripts/r2-put.mjs $clean $pathname
+          if ($LASTEXITCODE -ne 0) { throw "R2 upload failed (exit $LASTEXITCODE)" }
+
+          # Deterministic: the bucket's custom domain plus the key. Nothing to parse back out of
+          # the upload, and the "Prove the URL is direct" step below fetches it to confirm.
+          $url = "https://dl.thelongviewapp.com/$pathname"
           Write-Host "url=$url"
           "url=$url" >> $env:GITHUB_OUTPUT
           $url | Out-File artifacts/package-url.txt
