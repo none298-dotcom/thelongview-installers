@@ -104,6 +104,10 @@ Write-Host "client ${cw}x${ch} at ($($o.X),$($o.Y))"
 
 $blankAt = -1
 for ($i = 1; $i -le $MaxSteps; $i++) {
+  # Re-focus every step. Compose Desktop drops mouse input when its window is not the foreground
+  # one, and the first click (or the parked cursor) can leave it not-foreground, which looks exactly
+  # like a frozen app: the screen renders but never advances.
+  [W]::SetForegroundWindow($h) | Out-Null; Start-Sleep -Milliseconds 400
   $shot = Grab $rect; $shot.Save("$OutDir/walk-{0:D2}-a.png" -f $i)
   $content = ContentFraction $shot
   Write-Host ("step {0}: content {1:P2}" -f $i, $content)
