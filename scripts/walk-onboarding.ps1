@@ -111,7 +111,7 @@ for ($i = 1; $i -le $MaxSteps; $i++) {
 
   $bg = $shot.GetPixel([int]($cw * 0.5), [int]($ch * 0.45))
   $btn = FindFooter $shot $bg $cw $ch
-  if (-not $btn) { Write-Host "step $i: no footer button found (may be the main screen already)"; break }
+  if (-not $btn) { Write-Host "step ${i}: no footer button found (may be the main screen already)"; break }
   $bx = $o.X + $btn.Start + [int]($btn.Width / 2); $by = $o.Y + [int](($btn.Top + $btn.Bottom) / 2)
   Click $bx $by
   $after = Grab $rect; $after.Save("$OutDir/walk-{0:D2}-b.png" -f $i)
@@ -119,7 +119,7 @@ for ($i = 1; $i -le $MaxSteps; $i++) {
   if ((DiffFraction $shot $after) -lt 0.01) {
     # Button was dead: the sex step, whose Continue is disabled until an option is chosen. Click the
     # first option row (upper-middle of the content column), then the footer again.
-    Write-Host "step $i: footer inert, selecting an option (sex step) and retrying"
+    Write-Host "step ${i}: footer inert, selecting an option (sex step) and retrying"
     Click ($o.X + [int]($cw * 0.5)) ($o.Y + [int]($ch * 0.42))
     $btn2 = FindFooter (Grab $rect) $bg $cw $ch
     if ($btn2) { Click ($o.X + $btn2.Start + [int]($btn2.Width/2)) ($o.Y + [int](($btn2.Top + $btn2.Bottom)/2)) }
