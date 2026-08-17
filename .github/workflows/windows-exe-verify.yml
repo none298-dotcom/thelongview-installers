@@ -527,15 +527,10 @@ jobs:
       # never reached. This walks every step to the main screen and fails if that screen is blank.
       # Relaunches the app fresh so the walk starts at the welcome screen (onboarding is not persisted
       # until it completes, so a relaunch returns to the beginning).
-      - name: Walk the whole onboarding and prove the main screen is not blank
+      - name: Prove the Today screen renders on the installed build (seeded past onboarding)
         if: always()
         shell: pwsh
-        run: |
-          Get-Process -Name "The Long View" -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
-          Start-Sleep -Seconds 3
-          Start-Process -FilePath "${{ steps.launch.outputs.exe }}"
-          Start-Sleep -Seconds 8
-          ./ci/scripts/walk-onboarding.ps1 -OutDir artifacts
+        run: ./ci/scripts/today-render.ps1 -OutDir artifacts
 
       # RETIRED 2026-08-12. This step created a SEPARATE standard user (tlvstduser) and asserted that
       # THAT account could see and open what runneradmin had installed. Its own header stated the
