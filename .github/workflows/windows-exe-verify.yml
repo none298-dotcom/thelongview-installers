@@ -521,6 +521,22 @@ jobs:
         shell: pwsh
         run: ./ci/scripts/verify-ui.ps1 -OutDir artifacts
 
+      # THE CERTIFICATION GAP. verify-ui.ps1 above clicks ONCE and stops at the first transition.
+      # Microsoft failed this app 2026-08-17 under 10.1.2.10 with "does not display any content after
+      # the first round of Q&A" - a blank screen once onboarding is finished, a path the single click
+      # never reached. This walks every step to the main screen and fails if that screen is blank.
+      # Relaunches the app fresh so the walk starts at the welcome screen (onboarding is not persisted
+      # until it completes, so a relaunch returns to the beginning).
+      - name: Walk the whole onboarding and prove the main screen is not blank
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process -Name "The Long View" -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+          Start-Sleep -Seconds 3
+          Start-Process -FilePath "${{ steps.launch.outputs.exe }}"
+          Start-Sleep -Seconds 8
+          ./ci/scripts/walk-onboarding.ps1 -OutDir artifacts
+
       # RETIRED 2026-08-12. This step created a SEPARATE standard user (tlvstduser) and asserted that
       # THAT account could see and open what runneradmin had installed. Its own header stated the
       # model it tested: "install elevated, then come back as an ordinary user and try to use the
