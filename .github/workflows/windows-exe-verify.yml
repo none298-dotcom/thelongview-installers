@@ -462,6 +462,24 @@ jobs:
             if ($exe) { break }
           }
           if (-not $exe) { throw "Installed binary not found under %LOCALAPPDATA% or Program Files" }
+
+          # DIAGNOSTIC (2026-08-17): the Store rejection is a blank Today screen AFTER setup, not on
+          # the onboarding the smoke test currently reaches. Seed a fresh, non-graduated profile so
+          # the app boots STRAIGHT to Today, exactly the screen Microsoft sees blank. Same technique
+          # proven on macOS: THE_LONG_VIEW_DESKTOP_DATA_DIR + a minimal state.json (validated to boot
+          # to the Today hero). No app change, no owner data.
+          $dataDir = Join-Path $env:TEMP "tlv-today"
+          New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+          $state = @{
+            profile = @{ currentAge = 40; sex = "male"; yearsSmoking = 10.0; baselineCigarettesPerDay = 10.0 }
+            settings = @{ dailyReminderTime = "20:00"; deadlineLocalTime = "00:00"; pricePerPack = 12.75; cigarettesPerPack = 20.0 }
+            trackingStartDay = (Get-Date).AddDays(-1).ToString("yyyy-MM-dd")
+            ledger = @{}
+          } | ConvertTo-Json -Depth 6
+          Set-Content -Path (Join-Path $dataDir "state.json") -Value $state -Encoding UTF8
+          $env:THE_LONG_VIEW_DESKTOP_DATA_DIR = $dataDir
+          Write-Host "seeded fresh Today-screen state at $dataDir"
+
           Write-Host "launching: $($exe.FullName)"
           $proc = Start-Process -FilePath $exe.FullName -PassThru
           Start-Sleep -Seconds ${{ inputs.wait_seconds }}
@@ -470,6 +488,25 @@ jobs:
             exit 1
           }
           Write-Host "still running after ${{ inputs.wait_seconds }}s"
+
+          # Capture the Today screen NOW, before verify-ui.ps1 clicks anything, so a blank is visible
+          # as a blank. A swallowed render crash keeps the app running (crash-guard), so HasExited is
+          # false above even when the window is blank white; the screenshot is the real judge.
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $bnd = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $shot = New-Object System.Drawing.Bitmap $bnd.Width, $bnd.Height
+          $gfx = [System.Drawing.Graphics]::FromImage($shot)
+          $gfx.CopyFromScreen($bnd.Location, [System.Drawing.Point]::Empty, $bnd.Size)
+          $shot.Save("artifacts/today-screen.png")
+          Write-Host "today-screen.png saved ($($bnd.Width)x$($bnd.Height))"
+          $crash = Join-Path $dataDir "crash.log"
+          if (Test-Path $crash) {
+            Copy-Item $crash "artifacts/today-crash.log"
+            Write-Host "=== the swallowed crash (crash.log) ==="
+            Get-Content $crash
+          } else { Write-Host "no crash.log written (blank is a render no-op, not a thrown exception)" }
+
           "pid=$($proc.Id)" >> $env:GITHUB_OUTPUT
           "exe=$($exe.FullName)" >> $env:GITHUB_OUTPUT
 
