@@ -532,6 +532,11 @@ jobs:
         shell: pwsh
         run: ./ci/scripts/onboarding-steps.ps1 -OutDir artifacts
 
+      - name: Run the whole onboarding as one session and watch for a mid-flow blank
+        if: always()
+        shell: pwsh
+        run: ./ci/scripts/autoplay-capture.ps1 -OutDir artifacts
+
       # RETIRED 2026-08-12. This step created a SEPARATE standard user (tlvstduser) and asserted that
       # THAT account could see and open what runneradmin had installed. Its own header stated the
       # model it tested: "install elevated, then come back as an ordinary user and try to use the
