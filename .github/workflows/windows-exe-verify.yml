@@ -302,11 +302,16 @@ jobs:
       # cannot ask degrades to Unavailable (which DISARMS the lock) rather than to Refused (which
       # would keep the gate up and could strand somebody outside their own history).
       #
-      # Non-blocking for exactly the reason the step above is: this is an unreleased feature and it
-      # must not hold up a fix for a live one until it has gone green once. MAKE IT BLOCKING once
-      # it has.
+      # BLOCKING, as of run 33254368517 which is the first time it went green. It was non-blocking
+      # for exactly one run, and that run paid for the whole step: it went red on the assertion it
+      # exists for and found a real lockout. `verify()` was returning Refused, which keeps the gate
+      # up, where it had to return Unavailable, which disarms it. On a Windows machine whose Hello
+      # stopped working the app would have refused to open, permanently. See WindowsHello.kt's
+      # VERIFY_SCRIPT for the mapping that was wrong.
+      #
+      # Blocking now because that is the class of bug this catches, and shipping it is worse than
+      # holding up a release.
       - name: Prove the app lock's Windows Hello bridge actually works
-        continue-on-error: true
         working-directory: android
         shell: pwsh
         run: |
