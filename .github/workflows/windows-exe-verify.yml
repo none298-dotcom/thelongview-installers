@@ -285,6 +285,36 @@ jobs:
           ./gradlew.bat :desktop:test --tests "*WindowsInstallerTest*" --no-daemon
           if ($LASTEXITCODE -ne 0) { throw "The updater would not accept our own signed installer" }
 
+      # ── The app lock's Windows half (D16) ─────────────────────────────────
+      # The lock was verified by USING it on iPhone, on a Mac and on an Android emulator. Windows
+      # had nothing, because there is no Windows machine on the development side and no emulator
+      # for one, so `WindowsHello.kt` shipped as the single unproven piece of the feature. This
+      # runner is a real Windows machine and can close most of that gap.
+      #
+      # WHAT IT CANNOT PROVE: a runner has no enrolled fingerprint, no PIN and no interactive
+      # desktop, so nothing can answer a Hello prompt and a successful verification is unreachable
+      # here. That last step still needs a person at a real machine.
+      #
+      # WHAT IT DOES PROVE, which is the part written from documentation and executed by nobody:
+      # that the base64 -EncodedCommand payload is well formed, that powershell.exe parses the
+      # script, that the WinRT UserConsentVerifier type resolves from a JVM-launched PowerShell,
+      # that the AsTask reflection finds the right generic overload, and that a machine which
+      # cannot ask degrades to Unavailable (which DISARMS the lock) rather than to Refused (which
+      # would keep the gate up and could strand somebody outside their own history).
+      #
+      # Non-blocking for exactly the reason the step above is: this is an unreleased feature and it
+      # must not hold up a fix for a live one until it has gone green once. MAKE IT BLOCKING once
+      # it has.
+      - name: Prove the app lock's Windows Hello bridge actually works
+        continue-on-error: true
+        working-directory: android
+        shell: pwsh
+        run: |
+          # Not piped into Select-String: a pipeline's $LASTEXITCODE is the last command's, which
+          # would make this pass whatever gradle decided. Same trap as the step above.
+          ./gradlew.bat :desktop:test --tests "*WindowsHelloTest*" --no-daemon -i
+          if ($LASTEXITCODE -ne 0) { throw "The Windows Hello bridge is broken on a real Windows machine" }
+
       - name: Silent install, exactly as a certifier does
         shell: pwsh
         run: |
