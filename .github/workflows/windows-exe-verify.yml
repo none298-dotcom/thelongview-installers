@@ -54,6 +54,10 @@ on:
       # now correctly PASSES. The mode is kept only so old dispatch links do not error; do not use it
       # to "prove an assertion bites". The certification assertions are now scope-aware: they read
       # perUserInstall from the source and check the scope-appropriate location.
+      min_named_elements:
+        description: "Fail the accessibility step if the Java Access Bridge exposes fewer named elements than this. 0 reports without gating."
+        type: string
+        default: "12"
       break_mode:
         description: "Inject a known defect, to prove an assertion actually goes red. Always 'none' for a real build."
         type: choice
@@ -516,15 +520,18 @@ jobs:
         run: ./ci/scripts/verify-window-icon.ps1 -ExePath "${{ steps.launch.outputs.exe }}" -OutDir artifacts
 
       # ── The part that is not just "it is alive" ───────────────────────────
-      # ANSWERED, and the answer was no: UIA finds the top level window and
-      # exactly one nameless Pane inside it. Compose Desktop draws through Skia
-      # and publishes no semantics tree, so there is no element to find by name
-      # and no InvokePattern to invoke. This step stays, as informational only,
-      # because it is also the accessibility check: the day Compose starts
-      # exposing its tree, or the day the Java Access Bridge is wired up, this
-      # log is where it will show. It must never gate the build, since it
-      # reports a known and currently expected absence.
-      - name: Report what UI Automation can see (accessibility, informational)
+      # THIS IS NOT THE ACCESSIBILITY CHECK, and for a while it was mistaken for
+      # one. UIA finds the top level window and exactly one nameless Pane inside
+      # it, which was read as "Compose publishes no semantics and screen readers
+      # get nothing". That conclusion does not follow. Compose Desktop does not
+      # implement UI Automation on Windows at ALL; it publishes a
+      # javax.accessibility tree, which UIA cannot see by design. This step
+      # therefore returns the same one-Pane answer whether the app is fully
+      # accessible or completely mute, so it can never be evidence either way.
+      # The real check is the Java Access Bridge step below. This one is kept
+      # for what it can honestly tell us: that a top level window exists, is
+      # named, and can be targeted for the synthetic clicking further down.
+      - name: Report what UI Automation can see (window discovery, informational)
         continue-on-error: true
         shell: pwsh
         run: |
@@ -545,8 +552,20 @@ jobs:
             Write-Host ("  {0,-22} name='{1}'" -f $_.Current.ControlType.ProgrammaticName, $_.Current.Name)
           }
           if ($all.Count -le 1) {
-            Write-Host "::warning::UIA sees the window but no inner elements. Compose is not exposing its semantics tree here, so clicking will need a different mechanism."
+            Write-Host "UIA sees the window and no inner elements, which is the expected and permanent answer for a Skia-rendered toolkit. It says nothing about accessibility; see the Java Access Bridge step. It does mean clicking has to be synthetic mouse input, which is what verify-ui.ps1 does."
           }
+
+      # ── The accessibility check that can actually fail ────────────────────
+      # Reads the app's tree through the Java Access Bridge, which is the same
+      # path Narrator, NVDA and JAWS take. Two things have to be true for this
+      # to pass and both are easy to lose silently: jdk.accessibility must be in
+      # the jpackage modules list, or the bridge class is not in the shipped
+      # runtime at all, and Main.kt must set assistive_technologies, or the
+      # class is present and never loaded. Neither omission breaks a build, a
+      # test, a launch or a screenshot. This step is the only thing that notices.
+      - name: Read the accessibility tree through the Java Access Bridge
+        shell: pwsh
+        run: python ci/scripts/jab-probe.py --min-named ${{ inputs.min_named_elements }}
 
       # Superseded and NON-BLOCKING. This single synthetic click is flaky on the runner (it does not
       # reliably accept even one click every run), and it false-failed a build whose every screen
