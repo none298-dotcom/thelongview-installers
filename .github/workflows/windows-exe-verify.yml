@@ -55,9 +55,15 @@ on:
       # to "prove an assertion bites". The certification assertions are now scope-aware: they read
       # perUserInstall from the source and check the scope-appropriate location.
       min_named_elements:
+        # 4, because the screen the probe arrives at is the first onboarding step, and a working
+        # bridge shows five names there: the window, three lines of copy and the Begin button.
+        # Set from what a passing run actually reported, not from a guess. Deliberately low: the
+        # failure this guards against is the tree collapsing to nothing, which is what happens
+        # when jdk.accessibility is dropped from the runtime or Main.kt stops asking for the
+        # bridge. A tighter number would break on a copy edit and teach everyone to ignore it.
         description: "Fail the accessibility step if the Java Access Bridge exposes fewer named elements than this. 0 reports without gating."
         type: string
-        default: "12"
+        default: "4"
       break_mode:
         description: "Inject a known defect, to prove an assertion actually goes red. Always 'none' for a real build."
         type: choice

@@ -117,7 +117,7 @@ def top_level_windows(user32, title):
     return found, seen
 
 
-def walk(bridge, vm_id, context, depth, out, limit):
+def walk(bridge, vm_id, context, depth, out, limit, buttons):
     """Depth first, and deliberately unbounded in breadth. A tree that is rich at the root and
     empty two levels down is still an app a screen reader cannot read, so the count that this
     returns has to come from the whole thing."""
@@ -126,6 +126,8 @@ def walk(bridge, vm_id, context, depth, out, limit):
         return 0, 0
     named = 1 if info.name.strip() else 0
     total = 1
+    if info.name.strip() and "button" in (info.role_en_US or info.role or "").lower():
+        buttons.append(info.name.strip())
     if len(out) < limit:
         out.append(
             "  " * depth
@@ -137,7 +139,7 @@ def walk(bridge, vm_id, context, depth, out, limit):
         child = bridge.getAccessibleChildFromContext(vm_id, context, index)
         if not child:
             continue
-        child_total, child_named = walk(bridge, vm_id, child, depth + 1, out, limit)
+        child_total, child_named = walk(bridge, vm_id, child, depth + 1, out, limit, buttons)
         total += child_total
         named += child_named
         bridge.releaseJavaObject(vm_id, child)
@@ -152,6 +154,8 @@ def main():
                         help="fail if fewer than this many elements carry a name. 0 reports only.")
     parser.add_argument("--print-limit", type=int, default=200)
     parser.add_argument("--settle-seconds", type=float, default=8.0)
+    parser.add_argument("--no-require-button", dest="require_button", action="store_false",
+                        help="skip the assertion that some control carries a name")
     args = parser.parse_args()
 
     dll_path = find_bridge_dll(args.dll)
@@ -206,17 +210,30 @@ def main():
         return 1
 
     lines = []
-    total, named = walk(bridge, vm_id.value, context, 0, lines, args.print_limit)
+    buttons = []
+    total, named = walk(bridge, vm_id.value, context, 0, lines, args.print_limit, buttons)
     print(f"accessible elements: {total}, of which named: {named}")
     for line in lines:
         print(line)
     if len(lines) >= args.print_limit:
         print(f"  ... printed the first {args.print_limit} of {total}")
 
+    failed = False
     if args.min_named and named < args.min_named:
         print(f"::error::Only {named} named elements. A screen reader needs at least {args.min_named} here.")
-        return 1
-    return 0
+        failed = True
+
+    # A tree of labels and no controls is a page that can be read and not used, which is its own
+    # kind of broken and would pass a count on its own. The screen this probe sees is the first
+    # onboarding step, whose only control is Begin.
+    if args.require_button:
+        if buttons:
+            print("named buttons: " + ", ".join(buttons))
+        else:
+            print("::error::No named button anywhere in the tree. A screen reader user could read "
+                  "this screen and have nothing to press.")
+            failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
