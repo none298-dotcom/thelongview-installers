@@ -567,6 +567,36 @@ jobs:
         shell: pwsh
         run: python ci/scripts/jab-probe.py --min-named ${{ inputs.min_named_elements }}
 
+      # Runs whether the probe passed or failed, because the three things it prints are the three
+      # ways the bridge goes quiet, and none of them is visible from the probe's side. A missing
+      # module, a runtime that carries the class but not its native library, and an app that
+      # decided at startup not to ask for it all look identical from outside: isJavaWindow false.
+      - name: Show what the packaged runtime carries for accessibility
+        if: always()
+        shell: pwsh
+        run: |
+          $roots = @("$env:LOCALAPPDATA\The Long View", "$env:ProgramFiles\The Long View") |
+                     Where-Object { Test-Path $_ }
+          foreach ($r in $roots) {
+            $release = Get-ChildItem $r -Recurse -Filter 'release' -EA SilentlyContinue | Select-Object -First 1
+            if ($release) {
+              $modules = (Get-Content $release.FullName | Where-Object { $_ -like 'MODULES=*' })
+              Write-Host "runtime modules: $modules"
+              Write-Host "jdk.accessibility present: $($modules -like '*jdk.accessibility*')"
+            }
+            Write-Host "accessibility libraries in the shipped runtime:"
+            Get-ChildItem $r -Recurse -EA SilentlyContinue |
+              Where-Object { $_.Name -match 'ccess' } |
+              ForEach-Object { Write-Host "  $($_.FullName)" }
+          }
+          $log = "$env:APPDATA\TheLongView\crash.log"
+          if (Test-Path $log) {
+            Write-Host "crash.log:"
+            Get-Content $log | ForEach-Object { Write-Host "  $_" }
+          } else {
+            Write-Host "no crash.log, so startup did not record a reason for skipping the bridge"
+          }
+
       # Superseded and NON-BLOCKING. This single synthetic click is flaky on the runner (it does not
       # reliably accept even one click every run), and it false-failed a build whose every screen
       # was proven to render. The two steps below - render each onboarding screen in isolation, then
