@@ -573,6 +573,12 @@ jobs:
         shell: pwsh
         run: python ci/scripts/jab-probe.py --min-named ${{ inputs.min_named_elements }}
 
+      # The probe above reads the tree the way a screen reader does. This runs a real one: NVDA,
+      # silent synthesizer, IO log, Tab through the first screen, and asserts on what it spoke.
+      - name: Run NVDA against the app and check what it says
+        shell: pwsh
+        run: ./ci/scripts/nvda-speech.ps1 -MustSay "Begin" -OutDir artifacts
+
       # Runs whether the probe passed or failed, because the three things it prints are the three
       # ways the bridge goes quiet, and none of them is visible from the probe's side. A missing
       # module, a runtime that carries the class but not its native library, and an app that
