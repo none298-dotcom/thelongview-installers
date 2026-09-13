@@ -7,6 +7,7 @@
 param(
   [string]$Title = "The Long View",
   [string[]]$MustSay = @("Begin"),
+  [string[]]$MustNotSay = @("unknown"),
   [string]$OutDir = "artifacts"
 )
 $ErrorActionPreference = "Stop"
@@ -80,4 +81,6 @@ $spoken | Set-Content (Join-Path $OutDir "nvda-speech.txt")
 
 $missing = $MustSay | Where-Object { $w = $_; -not ($spoken | Where-Object { $_ -match [regex]::Escape($w) }) }
 if ($missing) { throw "NVDA never said: $($missing -join ', ')" }
+$bad = $MustNotSay | Where-Object { $w = $_; $spoken | Where-Object { $_ -match "'$([regex]::Escape($w))'" } }
+if ($bad) { throw "NVDA said: $($bad -join ', ') (a focus stop with no name)" }
 Write-Host "NVDA said every required phrase: $($MustSay -join ', ')"
