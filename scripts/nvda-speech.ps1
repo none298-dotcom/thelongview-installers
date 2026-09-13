@@ -49,8 +49,17 @@ public static class Fg {
   [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);
 }
 "@
-$hwnd = [Fg]::FindWindow($null, $Title)
-if ($hwnd -eq [IntPtr]::Zero) { throw "No window titled '$Title'" }
+# By the app's own process rather than FindWindow's exact title match, which found nothing on the
+# runner even with the app open: the process with a visible main window whose title names the app.
+$app = Get-Process | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero -and $_.MainWindowTitle -like "*$Title*" } |
+       Select-Object -First 1
+if (-not $app) {
+  Get-Process | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
+    ForEach-Object { Write-Host "  window: $($_.ProcessName) '$($_.MainWindowTitle)'" }
+  throw "No window titled like '$Title'"
+}
+$hwnd = $app.MainWindowHandle
+Write-Host "app window: $($app.ProcessName) '$($app.MainWindowTitle)'"
 # A synthetic Alt press lets a background process take the foreground.
 [Fg]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [Fg]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
 [Fg]::ShowWindow($hwnd, 9) | Out-Null
