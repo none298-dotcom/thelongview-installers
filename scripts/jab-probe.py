@@ -39,6 +39,16 @@ jint = ctypes.c_int32
 JOBJECT64 = ctypes.c_int64  # the 64 bit bridge passes contexts as jlong, not as a pointer
 
 
+class AccessibleActionInfo(ctypes.Structure):
+    """AccessBridgePackages.h: one action name."""
+    _fields_ = [("name", ctypes.c_wchar * SHORT_STRING_SIZE)]
+
+
+class AccessibleActionsToDo(ctypes.Structure):
+    """AccessBridgePackages.h, MAX_ACTIONS_TO_DO = 32."""
+    _fields_ = [("actionsCount", jint), ("actions", AccessibleActionInfo * 32)]
+
+
 class AccessibleContextInfo(ctypes.Structure):
     """AccessBridgePackages.h. Field order and widths are load bearing: ctypes does not
     validate this against the DLL, so a wrong layout returns plausible garbage rather than an
@@ -146,6 +156,25 @@ def walk(bridge, vm_id, context, depth, out, limit, buttons):
     return total, named
 
 
+def find_named(bridge, vm_id, context, name):
+    """The first context, depth first, whose accessible name is exactly `name`. The match is
+    returned unreleased, because the caller is about to act on it; everything else is released."""
+    info = AccessibleContextInfo()
+    if not bridge.getAccessibleContextInfo(vm_id, context, ctypes.byref(info)):
+        return None
+    if info.name.strip() == name:
+        return context
+    for index in range(info.childrenCount):
+        child = bridge.getAccessibleChildFromContext(vm_id, context, index)
+        if not child:
+            continue
+        found = find_named(bridge, vm_id, child, name)
+        if found is not None:
+            return found
+        bridge.releaseJavaObject(vm_id, child)
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--title", default="The Long View")
@@ -154,6 +183,9 @@ def main():
                         help="fail if fewer than this many elements carry a name. 0 reports only.")
     parser.add_argument("--print-limit", type=int, default=200)
     parser.add_argument("--settle-seconds", type=float, default=8.0)
+    parser.add_argument("--press", default=None,
+                        help="after reading the tree, press the control with exactly this name, the "
+                             "way a screen reader would, and fail if it cannot be pressed")
     parser.add_argument("--no-require-button", dest="require_button", action="store_false",
                         help="skip the assertion that some control carries a name")
     args = parser.parse_args()
@@ -176,6 +208,8 @@ def main():
     bridge.getAccessibleContextInfo.restype = ctypes.c_bool
     bridge.getAccessibleChildFromContext.argtypes = [ctypes.c_int32, JOBJECT64, jint]
     bridge.getAccessibleChildFromContext.restype = JOBJECT64
+    bridge.doAccessibleActions.argtypes = [ctypes.c_int32, JOBJECT64, ctypes.POINTER(AccessibleActionsToDo), ctypes.POINTER(jint)]
+    bridge.doAccessibleActions.restype = ctypes.c_bool
     bridge.releaseJavaObject.argtypes = [ctypes.c_int32, JOBJECT64]
     bridge.releaseJavaObject.restype = None
 
@@ -233,6 +267,27 @@ def main():
             print("::error::No named button anywhere in the tree. A screen reader user could read "
                   "this screen and have nothing to press.")
             failed = True
+
+    # Pressing through the bridge is how a desktop dialog gets opened on a runner that will not take
+    # repeated synthetic clicks, and it proves the control is operable by a screen reader, which a
+    # mouse click does not.
+    if args.press:
+        target = find_named(bridge, vm_id.value, context, args.press)
+        if target is None:
+            print(f"::error::No control named '{args.press}' in the tree.")
+            return 1
+        todo = AccessibleActionsToDo()
+        todo.actionsCount = 1
+        todo.actions[0].name = "click"
+        failure = jint(-1)
+        pressed = bridge.doAccessibleActions(vm_id.value, target, ctypes.byref(todo), ctypes.byref(failure))
+        bridge.releaseJavaObject(vm_id.value, target)
+        pump(user32, 2.0)
+        if not pressed:
+            print(f"::error::'{args.press}' is in the tree and would not take the click action (failure index {failure.value}).")
+            return 1
+        print(f"pressed '{args.press}' through the bridge")
+
     return 1 if failed else 0
 
 

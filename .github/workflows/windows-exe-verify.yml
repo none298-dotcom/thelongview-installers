@@ -628,6 +628,25 @@ jobs:
         shell: pwsh
         run: ./ci/scripts/autoplay-capture.ps1 -OutDir artifacts
 
+      # THE DIALOG LAYER ON WINDOWS. Desktop dialogs are their own windows (compose.layers.type=WINDOW,
+      # so a screen reader can find them), and Windows renders in software mode. That pairing had never
+      # been seen on Windows. The autoplay step above leaves the app on Today, so this presses
+      # "Make a plan" through the Access Bridge, the way a screen reader would, and photographs the
+      # whole screen. Non-blocking until a run has shown what a good capture looks like.
+      - name: Open a dialog through the Access Bridge and photograph it (non-blocking)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          python ci/scripts/jab-probe.py --press "Make a plan" --no-require-button --print-limit 5
+          Start-Sleep -Seconds 3
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $g.Dispose()
+          $bmp.Save("artifacts/dialog-make-a-plan.png")
+
       # RETIRED 2026-08-12. This step created a SEPARATE standard user (tlvstduser) and asserted that
       # THAT account could see and open what runneradmin had installed. Its own header stated the
       # model it tested: "install elevated, then come back as an ordinary user and try to use the
