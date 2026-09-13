@@ -292,7 +292,7 @@ jobs:
           }
           # NOT piped into Select-String. A pipeline's $LASTEXITCODE is the LAST command's, so
           # filtering the output here would have made this step pass whatever gradle decided.
-          ./gradlew.bat :desktop:test --tests "*WindowsInstallerTest*" --no-daemon
+          ./gradlew.bat :desktop:test --tests "*WindowsInstallerTest*" --tests "*WindowsUpdateScriptTest*" --no-daemon
           if ($LASTEXITCODE -ne 0) { throw "The updater would not accept our own signed installer" }
 
       # ── The app lock's Windows half (D16) ─────────────────────────────────
