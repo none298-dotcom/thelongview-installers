@@ -268,17 +268,14 @@ jobs:
       # Deliberately BEFORE the install and publish steps: an updater that would reject its own
       # release is a reason not to ship the release.
       - name: Prove the in-app updater accepts this build and refuses everything else
-        # REPORTS, DOES NOT BLOCK, and that is temporary and deliberate.
-        #
-        # This step is about the in-app updater, a feature that is not shipped yet. It spent three
-        # runs failing on its own harness rather than on anything about the installer, while a
-        # Microsoft Store rejection sat unfixed behind it. A check for an unreleased feature must not
-        # hold up a fix for a live one.
-        #
-        # MAKE THIS BLOCKING AGAIN once it has gone green once. Until then a red X here means the
-        # updater's signature check could not be proven, not that the installer is bad: the
-        # certification assertions below are the ones that speak for the installer, and they block.
-        continue-on-error: true
+        # BLOCKING. It was continue-on-error while the updater was unreleased, and that hid a real
+        # failure on every run through 1.4.8: Windows PowerShell started from this step's pwsh
+        # inherited PowerShell 7's PSModulePath, could not load Microsoft.PowerShell.Security, and
+        # the updater refused our own signed installer. GitHub reported the step as "success" the
+        # whole time. Two app fixes made it pass: clearing PSModulePath for the child PowerShell
+        # (122ca1e), then reading stdout apart from stderr, whose "#< CLIXML" progress block was
+        # being read as the signature status (a19e4de). Green on run 34740601879. The updater ships
+        # in Settings, so a red here is a reason not to publish.
         # gradlew.bat lives in android/, not at the repo root. Same as "Build the EXE" above; the
         # first version of this step omitted it and died with a command-not-found that reads like a
         # test failure.
