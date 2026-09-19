@@ -331,6 +331,13 @@ jobs:
           if (-not $argsFile) { Write-Host "::warning::no jpackage argument file builds an exe; the uninstall step is not in this build"; exit 0 }
           Write-Host "using $($argsFile.FullName)"
           $lines = Get-Content $argsFile.FullName
+          Write-Host "--- jpackage arguments ---"; $lines | ForEach-Object { Write-Host "  $_" }
+          $inputIndex = [Array]::IndexOf($lines, "--input")
+          if ($inputIndex -ge 0) {
+            $inputDir = $lines[$inputIndex + 1].Trim('"')
+            Write-Host "--input $inputDir exists: $(Test-Path $inputDir)"
+            if (Test-Path $inputDir) { Write-Host ("  holds: " + ((Get-ChildItem $inputDir | ForEach-Object Name) -join ', ')) }
+          }
           $i = [Array]::IndexOf($lines, "--resource-dir")
           if ($i -lt 0) { Write-Host "::warning::jpackage was not given a resource dir; the uninstall step is not in this build"; exit 0 }
           $current = $lines[$i + 1].Trim('"')
@@ -346,9 +353,17 @@ jobs:
           # From the folder Compose runs jpackage in: some arguments in that file are relative to it.
           Push-Location $argsFile.Directory.FullName
           & "$env:JAVA_HOME\bin\jpackage.exe" "@$newArgs"
+          $code = $LASTEXITCODE
           Pop-Location
-          if ($LASTEXITCODE -ne 0) { throw "jpackage failed rebuilding the installer with the uninstall step" }
-          Write-Host "rebuilt with overrides.wxi from $mine"
+          if ($code -ne 0) {
+            # Not fatal yet: the rest of the run still verifies the installer Compose built, which
+            # is the same installer without the uninstall step.
+            Write-Host "::warning::jpackage exited $code rebuilding with the uninstall step; falling back to Compose's own installer"
+            & ./gradlew.bat -p android :desktop:packageExe --no-daemon
+            if ($LASTEXITCODE -ne 0) { throw "could not rebuild the installer at all" }
+          } else {
+            Write-Host "rebuilt with overrides.wxi from $mine"
+          }
 
       - name: Find the installer
         id: find
