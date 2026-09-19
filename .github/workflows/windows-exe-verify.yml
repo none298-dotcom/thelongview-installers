@@ -334,7 +334,7 @@ jobs:
           Write-Host "--- jpackage arguments ---"; $lines | ForEach-Object { Write-Host "  $_" }
           $inputIndex = [Array]::IndexOf($lines, "--input")
           if ($inputIndex -ge 0) {
-            $inputDir = $lines[$inputIndex + 1].Trim('"').Replace('\\\\', '\\')
+            $inputDir = $lines[$inputIndex + 1].Trim('"').Replace('\\', '\')
             Write-Host "--input $inputDir exists: $(Test-Path $inputDir)"
             if (Test-Path $inputDir) { Write-Host ("  holds: " + ((Get-ChildItem $inputDir | ForEach-Object Name) -join ', ')) }
           }
@@ -344,16 +344,21 @@ jobs:
           # to touch the folder, and double our own on the way back in: writing a single-backslash
           # path corrupted the arguments after it, which is what "the configured main jar does not
           # exist" actually meant.
-          $current = $lines[$i + 1].Trim('"').Replace('\\\\', '\\')
+          $current = $lines[$i + 1].Trim('"').Replace('\\', '\')
           $mine = "$env:GITHUB_WORKSPACE\jpackage-resources"
           Remove-Item $mine -Recurse -Force -EA SilentlyContinue
           New-Item -ItemType Directory -Force -Path $mine | Out-Null
           if (Test-Path $current) { Copy-Item "$current\*" -Destination $mine -Recurse -Force }
           Copy-Item windows/installer/overrides.wxi -Destination $mine -Force
-          $lines[$i + 1] = '"' + $mine.Replace('\\', '\\\\') + '"'
+          $lines[$i + 1] = '"' + $mine.Replace('\', '\\') + '"'
           $newArgs = "$env:GITHUB_WORKSPACE\jpackage-args.txt"
           Set-Content -Path $newArgs -Value $lines
-          Get-ChildItem android/desktop/build/compose/binaries -Recurse -Filter *.exe | Remove-Item -Force
+          # Keep the installer Compose just built: if the rebuild fails, it is put back, rather than
+          # spending another Gradle build to get it again.
+          $built = Get-ChildItem android/desktop/build/compose/binaries -Recurse -Filter *.exe
+          $keep = "$env:GITHUB_WORKSPACE\installer-backup"
+          New-Item -ItemType Directory -Force -Path $keep | Out-Null
+          $built | ForEach-Object { Copy-Item $_.FullName -Destination $keep -Force; Remove-Item $_.FullName -Force }
           # From the folder Compose runs jpackage in: some arguments in that file are relative to it.
           Push-Location $argsFile.Directory.FullName
           & "$env:JAVA_HOME\bin\jpackage.exe" "@$newArgs"
@@ -362,9 +367,8 @@ jobs:
           if ($code -ne 0) {
             # Not fatal yet: the rest of the run still verifies the installer Compose built, which
             # is the same installer without the uninstall step.
-            Write-Host "::warning::jpackage exited $code rebuilding with the uninstall step; falling back to Compose's own installer"
-            & ./gradlew.bat -p android :desktop:packageExe --no-daemon
-            if ($LASTEXITCODE -ne 0) { throw "could not rebuild the installer at all" }
+            Write-Host "::warning::jpackage exited $code rebuilding with the uninstall step; keeping Compose's own installer, which has everything except that step"
+            Get-ChildItem $keep -Filter *.exe | ForEach-Object { Copy-Item $_.FullName -Destination $built[0].DirectoryName -Force }
           } else {
             Write-Host "rebuilt with overrides.wxi from $mine"
           }
