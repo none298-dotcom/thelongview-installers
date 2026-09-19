@@ -313,6 +313,35 @@ jobs:
         shell: pwsh
         run: ./gradlew.bat :desktop:packageExe --no-daemon
 
+      # Uninstalling must also unregister the widgets' identity package and the toast's protocol
+      # handler, or both outlive the files. jpackage's supported hook for that is an overrides.wxi
+      # in its --resource-dir (windows/installer/overrides.wxi). The Compose plugin clears that
+      # folder itself, so the EXE is built again here from the argument file Compose just wrote,
+      # with the same arguments and one changed: the resource folder, with our file added.
+      - name: Rebuild the EXE with the uninstall step
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $argsFile = Get-ChildItem android/desktop/build/compose/tmp -Recurse -Filter "*.args.txt" |
+                      Where-Object { $_.Name -like "*ackageExe*" } | Select-Object -First 1
+          if (-not $argsFile) { Write-Host "::warning::no jpackage argument file; the uninstall step is not in this build"; exit 0 }
+          $lines = Get-Content $argsFile.FullName
+          $i = [Array]::IndexOf($lines, "--resource-dir")
+          if ($i -lt 0) { Write-Host "::warning::jpackage was not given a resource dir; the uninstall step is not in this build"; exit 0 }
+          $current = $lines[$i + 1].Trim('"')
+          $mine = "$env:GITHUB_WORKSPACE\jpackage-resources"
+          Remove-Item $mine -Recurse -Force -EA SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $mine | Out-Null
+          if (Test-Path $current) { Copy-Item "$current\*" -Destination $mine -Recurse -Force }
+          Copy-Item windows/installer/overrides.wxi -Destination $mine -Force
+          $lines[$i + 1] = '"' + $mine + '"'
+          $newArgs = "$env:GITHUB_WORKSPACE\jpackage-args.txt"
+          Set-Content -Path $newArgs -Value $lines
+          Get-ChildItem android/desktop/build/compose/binaries -Recurse -Filter *.exe | Remove-Item -Force
+          & "$env:JAVA_HOME\bin\jpackage.exe" "@$newArgs"
+          if ($LASTEXITCODE -ne 0) { throw "jpackage failed rebuilding the installer with the uninstall step" }
+          Write-Host "rebuilt with overrides.wxi from $mine"
+
       - name: Find the installer
         id: find
         shell: pwsh
