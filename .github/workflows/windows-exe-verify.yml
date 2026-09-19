@@ -226,8 +226,15 @@ jobs:
       - name: Make a probe to read the signing Subject from
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\probe" | Out-Null
-          Add-Type -OutputAssembly "$env:GITHUB_WORKSPACE\probe\probe.exe" -OutputType ConsoleApplication -TypeDefinition 'public static class P { public static void Main() {} }'
+          # A real exe, because signing needs one: PowerShell 7's Add-Type cannot emit an
+          # executable ("Both the assembly types 'ConsoleApplication' and 'WindowsApplication' are
+          # not currently supported"), so the smallest .NET project stands in.
+          $src = "$env:GITHUB_WORKSPACE\probe-src"
+          New-Item -ItemType Directory -Force -Path $src | Out-Null
+          Set-Content "$src\probe.csproj" '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><AssemblyName>probe</AssemblyName><RuntimeIdentifier>win-x64</RuntimeIdentifier><SelfContained>false</SelfContained></PropertyGroup></Project>'
+          Set-Content "$src\Program.cs" 'class P { static void Main() { } }'
+          dotnet publish $src -o "$env:GITHUB_WORKSPACE\probe" --nologo -v quiet
+          if (-not (Test-Path "$env:GITHUB_WORKSPACE\probe\probe.exe")) { throw "probe build failed" }
 
       - name: Sign the probe (Azure Trusted Signing)
         if: ${{ env.AZURE_CLIENT_ID != '' }}
