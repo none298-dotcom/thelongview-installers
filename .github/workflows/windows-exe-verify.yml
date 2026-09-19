@@ -322,9 +322,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          Write-Host "argument files: $((Get-ChildItem android/desktop/build/compose/tmp -Recurse -Filter '*.args.txt' | ForEach-Object Name) -join ', ')"
+          # The one that builds the installer: it asks jpackage for type exe. Matching on the task
+          # name alone picked a different task's file, whose relative --input meant nothing here.
           $argsFile = Get-ChildItem android/desktop/build/compose/tmp -Recurse -Filter "*.args.txt" |
-                      Where-Object { $_.Name -like "*ackageExe*" } | Select-Object -First 1
-          if (-not $argsFile) { Write-Host "::warning::no jpackage argument file; the uninstall step is not in this build"; exit 0 }
+                      Where-Object { (Get-Content $_.FullName -Raw) -match '(?m)^"?--type"?\r?\n"?exe"?' } |
+                      Select-Object -First 1
+          if (-not $argsFile) { Write-Host "::warning::no jpackage argument file builds an exe; the uninstall step is not in this build"; exit 0 }
+          Write-Host "using $($argsFile.FullName)"
           $lines = Get-Content $argsFile.FullName
           $i = [Array]::IndexOf($lines, "--resource-dir")
           if ($i -lt 0) { Write-Host "::warning::jpackage was not given a resource dir; the uninstall step is not in this build"; exit 0 }
@@ -338,7 +343,10 @@ jobs:
           $newArgs = "$env:GITHUB_WORKSPACE\jpackage-args.txt"
           Set-Content -Path $newArgs -Value $lines
           Get-ChildItem android/desktop/build/compose/binaries -Recurse -Filter *.exe | Remove-Item -Force
+          # From the folder Compose runs jpackage in: some arguments in that file are relative to it.
+          Push-Location $argsFile.Directory.FullName
           & "$env:JAVA_HOME\bin\jpackage.exe" "@$newArgs"
+          Pop-Location
           if ($LASTEXITCODE -ne 0) { throw "jpackage failed rebuilding the installer with the uninstall step" }
           Write-Host "rebuilt with overrides.wxi from $mine"
 
