@@ -202,8 +202,16 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
-      - name: Set up msbuild (Windows helper)
-        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+      # Found with vswhere rather than microsoft/setup-msbuild: this repo allows only GitHub's own
+      # actions and the two Azure ones, and Visual Studio is already on the runner.
+      - name: Put msbuild on the PATH (Windows helper)
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          if (-not $msbuild) { throw "msbuild not found" }
+          Write-Host "msbuild: $msbuild"
+          Split-Path $msbuild >> $env:GITHUB_PATH
 
       - name: Azure login for the helper (federated, OIDC)
         if: ${{ env.AZURE_CLIENT_ID != '' }}
