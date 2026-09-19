@@ -192,6 +192,107 @@ jobs:
             }
           }
 
+      # ── The Windows helper (windows/ in the app repo) ─────────────────────────────────
+      # LongViewHelper.exe draws the reminder toast with its remind-me-later buttons and serves the
+      # Windows 11 widgets; its sparse identity package gives it the identity widgets require. Both
+      # are built and signed HERE, before the EXE, because the EXE installer carries them in
+      # app\resources and signing afterwards would not reach inside it.
+      - name: Set up the .NET 8 SDK (Windows helper)
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Set up msbuild (Windows helper)
+        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+
+      - name: Azure login for the helper (federated, OIDC)
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The identity package's Publisher must equal the certificate's Subject exactly. Rather than
+      # type it, sign a throwaway probe with the real certificate and read the Subject back.
+      - name: Make a probe to read the signing Subject from
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\probe" | Out-Null
+          Add-Type -OutputAssembly "$env:GITHUB_WORKSPACE\probe\probe.exe" -OutputType ConsoleApplication -TypeDefinition 'public static class P { public static void Main() {} }'
+
+      - name: Sign the probe (Azure Trusted Signing)
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        uses: azure/trusted-signing-action@1d365fec12862c4aa68fcac418143d73f0cea293 # v0
+        with:
+          azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
+          azure-client-id: ${{ env.AZURE_CLIENT_ID }}
+          endpoint: https://eus.codesigning.azure.net/
+          trusted-signing-account-name: mlcsigning
+          certificate-profile-name: mlc-public-trust
+          files-folder: ${{ github.workspace }}\probe
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Build and pack the Windows helper
+        id: helper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sig = Get-AuthenticodeSignature "$env:GITHUB_WORKSPACE\probe\probe.exe"
+          $subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { "CN=The Long View CI test" }
+          Write-Host "signing Subject: $subject"
+          $version = (Select-String -Path android/desktop/build.gradle.kts -Pattern 'val appVersion = "([0-9.]+)"').Matches[0].Groups[1].Value
+          $out = "$env:GITHUB_WORKSPACE\helper-out"
+          pwsh windows/scripts/stamp-identity.ps1 -Subject $subject -Version $version -Out $out
+
+          msbuild windows/Helper/LongViewHelper.csproj /restore /t:Publish /p:Configuration=Release /p:RuntimeIdentifier=win-x64 "/p:PublishDir=$out\" /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw "helper build failed" }
+
+          # makeappx insists the Executable named in the manifest exists in the packed folder, even
+          # for a sparse package whose real exe lives outside it; a placeholder satisfies it.
+          $stage = "$env:GITHUB_WORKSPACE\identity-stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item windows/Package/AppxManifest.xml, windows/Package/Assets -Destination $stage -Recurse
+          Set-Content -Path "$stage\LongViewHelper.exe" -Value "placeholder"
+          $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter makeappx.exe | Where-Object { $_.FullName -match 'x64' } | Sort-Object FullName -Descending | Select-Object -First 1
+          & $makeappx.FullName pack /d $stage /p "$out\TheLongViewIdentity.msix" /nv /o
+          if ($LASTEXITCODE -ne 0) { throw "makeappx failed" }
+          Copy-Item windows/Package/Assets -Destination $out -Recurse -Force
+          "out=$out" >> $env:GITHUB_OUTPUT
+          "subject=$subject" >> $env:GITHUB_OUTPUT
+          Get-ChildItem $out | Measure-Object -Property Length -Sum | ForEach-Object { Write-Host ("helper folder: {0:N1} MB, {1} files" -f ($_.Sum/1MB), $_.Count) }
+
+      - name: Sign the helper and its identity package (Azure Trusted Signing)
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        uses: azure/trusted-signing-action@1d365fec12862c4aa68fcac418143d73f0cea293 # v0
+        with:
+          azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
+          azure-client-id: ${{ env.AZURE_CLIENT_ID }}
+          endpoint: https://eus.codesigning.azure.net/
+          trusted-signing-account-name: mlcsigning
+          certificate-profile-name: mlc-public-trust
+          files-folder: ${{ steps.helper.outputs.out }}
+          files-folder-filter: exe,msix
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Put the helper where the installer picks it up
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($f in @("LongViewHelper.exe", "TheLongViewIdentity.msix")) {
+            $sig = Get-AuthenticodeSignature (Join-Path "${{ steps.helper.outputs.out }}" $f)
+            Write-Host "$f signature: $($sig.Status) $($sig.SignerCertificate.Subject)"
+            if ("${{ env.AZURE_CLIENT_ID }}" -ne "" -and $sig.Status -ne "Valid") { throw "$f is not validly signed" }
+          }
+          $dest = "android/desktop/app-resources/windows"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item "${{ steps.helper.outputs.out }}\*" -Destination $dest -Recurse -Force
+
       - name: Build the EXE
         working-directory: android
         shell: pwsh
@@ -374,7 +475,7 @@ jobs:
           $exe = $null
           foreach ($r in $roots) {
             $exe = Get-ChildItem $r -Recurse -Filter '*.exe' -EA SilentlyContinue |
-                   Where-Object { $_.Name -notlike 'unins*' } | Select-Object -First 1
+                   Where-Object { $_.Name -notlike 'unins*' -and $_.Name -ne 'LongViewHelper.exe' } | Select-Object -First 1
             if ($exe) { break }
           }
           if (-not $exe) { throw "Installed binary not found, so this mutation would prove nothing" }
@@ -503,7 +604,7 @@ jobs:
           $exe = $null
           foreach ($r in $roots) {
             $exe = Get-ChildItem $r -Recurse -Filter '*.exe' -EA SilentlyContinue |
-                   Where-Object { $_.Name -notlike 'unins*' } | Select-Object -First 1
+                   Where-Object { $_.Name -notlike 'unins*' -and $_.Name -ne 'LongViewHelper.exe' } | Select-Object -First 1
             if ($exe) { break }
           }
           if (-not $exe) { throw "Installed binary not found under %LOCALAPPDATA% or Program Files" }
@@ -517,6 +618,45 @@ jobs:
           Write-Host "still running after ${{ inputs.wait_seconds }}s"
           "pid=$($proc.Id)" >> $env:GITHUB_OUTPUT
           "exe=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      # The helper as installed: the app runs `register` at start, so by now the protocol, the toast
+      # AUMID and (on this Windows 11 class build) the identity package should all be in place.
+      # The Widgets Board does not exist on a Server runner, so a placed widget cannot be seen here;
+      # what can be proven is registration, the widget declaration Windows recorded, a toast, and a
+      # toast button reaching the app.
+      - name: "Windows helper: identity package, toast, and a button press"
+        shell: pwsh
+        run: |
+          $exe = Get-Item "${{ steps.launch.outputs.exe }}"
+          $helper = Join-Path $exe.DirectoryName "app\resources\LongViewHelper.exe"
+          if (-not (Test-Path $helper)) { Write-Host "::error::LongViewHelper.exe is not in the install"; exit 1 }
+          $p = Start-Process $helper -ArgumentList register -Wait -PassThru
+          Write-Host "register exit: $($p.ExitCode)"
+          $log = "$env:APPDATA\TheLongView\helper.log"
+          if (Test-Path $log) { Write-Host "--- helper.log ---"; Get-Content $log }
+          $pkg = Get-AppxPackage LittleBirdTrading.TheLongView.Identity
+          if ($pkg) {
+            Write-Host "identity package: $($pkg.PackageFullName) at $($pkg.InstallLocation)"
+            $m = Get-AppxPackageManifest $pkg
+            $ext = $m.Package.Applications.Application.Extensions.Extension
+            Write-Host ("declared: " + (($ext | ForEach-Object { $_.Category }) -join ', '))
+            Write-Host ("widgets: " + (($m.Package.Applications.Application.Extensions.Extension.AppExtension.Properties.WidgetProvider.Definitions.Definition | ForEach-Object { $_.Id }) -join ', '))
+          } else {
+            Write-Host "::warning::the identity package is not registered (see helper.log above); widgets will not appear"
+          }
+          $scheme = Get-ItemProperty "HKCU:\Software\Classes\thelongview-reminder\shell\open\command" -EA SilentlyContinue
+          Write-Host "protocol handler: $($scheme.'(default)')"
+          if (-not $scheme) { Write-Host "::error::the toast's button protocol is not registered"; exit 1 }
+          $t = Start-Process $helper -ArgumentList @('toast', '"Ready to log today?"', '"A quick note on today keeps your numbers accurate."', 'IN_15_MINUTES="In 15 minutes"', 'IN_1_HOUR="In 1 hour"', 'TOMORROW=Tomorrow') -Wait -PassThru
+          Write-Host "toast exit: $($t.ExitCode)"
+          if ($t.ExitCode -ne 0) { Write-Host "::error::the toast did not show"; if (Test-Path $log) { Get-Content $log -Tail 20 }; exit 1 }
+          Start-Process "thelongview-reminder:snooze/IN_1_HOUR"
+          Start-Sleep -Seconds 5
+          $req = "$env:APPDATA\TheLongView\requests"
+          Write-Host "requests left: $((Get-ChildItem $req -EA SilentlyContinue | ForEach-Object Name) -join ', ')"
+          $snooze = "$env:APPDATA\TheLongView\snooze-until"
+          if (Test-Path $snooze) { Write-Host "the app picked up the button: snooze-until $(Get-Content $snooze)" }
+          else { Write-Host "::error::a toast button press did not reach the app (no snooze-until)"; exit 1 }
 
       # The build shipped with the stock Java placeholder in its title bar and in Alt+Tab, and
       # the owner has failed store submissions over exactly that before. It was caught by a
