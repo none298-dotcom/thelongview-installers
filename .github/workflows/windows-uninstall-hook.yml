@@ -108,14 +108,25 @@ jobs:
           New-Item -ItemType Directory -Force -Path $extract | Out-Null
           [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, "$extract\main.wxs", $true)
           $zip.Dispose()
-          $ours = (Get-Content windows/installer/main.wxs -Raw) -replace '(?s)<!--\s*TLV BEGIN.*?TLV END\s*-->\r?\n?', '' -replace '(?s)^<\?xml[^>]*\?>\r?\n<!--.*?-->\r?\n', ''
-          $theirs = (Get-Content "$extract\main.wxs" -Raw) -replace '(?s)^<\?xml[^>]*\?>\r?\n', ''
-          $normalise = { param($t) ($t -replace '\r\n', "`n").TrimEnd() }
-          if ((& $normalise $ours) -ne (& $normalise $theirs)) {
+          # Compared line by line from <Wix onwards, with our marked blocks dropped: that skips our
+          # own header comment and any difference in how the file starts.
+          function Strip([string[]] $lines) {
+            $out = @(); $skipping = $false; $started = $false
+            foreach ($line in $lines) {
+              if ($line -match 'TLV BEGIN') { $skipping = $true; continue }
+              if ($line -match 'TLV END') { $skipping = $false; continue }
+              if ($skipping) { continue }
+              if (-not $started) { if ($line -match '^<Wix') { $started = $true } else { continue } }
+              $out += $line.TrimEnd()
+            }
+            return ,$out
+          }
+          $ours = Strip (Get-Content windows/installer/main.wxs)
+          $theirs = Strip (Get-Content "$extract\main.wxs")
+          $difference = Compare-Object $ours $theirs
+          if ($difference) {
             Write-Host "::error::windows/installer/main.wxs no longer matches this JDK's own main.wxs. Re-vendor it."
-            Set-Content "$env:GITHUB_WORKSPACE\ours.wxs" (& $normalise $ours)
-            Set-Content "$env:GITHUB_WORKSPACE\theirs.wxs" (& $normalise $theirs)
-            (Compare-Object (Get-Content "$env:GITHUB_WORKSPACE\ours.wxs") (Get-Content "$env:GITHUB_WORKSPACE\theirs.wxs")) | ForEach-Object { Write-Host "  $($_.SideIndicator) $($_.InputObject)" }
+            $difference | ForEach-Object { Write-Host "  $($_.SideIndicator) $($_.InputObject)" }
             exit 1
           }
           Write-Host "main.wxs matches this JDK's, apart from the marked block"
