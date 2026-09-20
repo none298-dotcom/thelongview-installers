@@ -79,9 +79,12 @@ jobs:
           if ($r -ge 0) {
             $current = $kept[$r + 1].Trim('"').Replace('\\', '\')
             if (Test-Path $current) { Copy-Item "$current\*" -Destination $mine -Recurse -Force }
-            $kept[$r + 1] = '"' + $mine.Replace('\', '\\') + '"'
+            # Forward slashes, not escaped backslashes: Java takes them on Windows, and an
+            # argument file treats a backslash as an escape, which is how the first attempt
+            # corrupted the arguments after it.
+            $kept[$r + 1] = '"' + $mine.Replace('\', '/') + '"'
           } else {
-            $kept += '--resource-dir'; $kept += '"' + $mine.Replace('\', '\\') + '"'
+            $kept += '--resource-dir'; $kept += '"' + $mine.Replace('\', '/') + '"'
           }
           Copy-Item windows/installer/overrides.wxi -Destination $mine -Force
           Write-Host "resource dir holds: $((Get-ChildItem $mine | ForEach-Object Name) -join ', ')"
@@ -89,7 +92,7 @@ jobs:
           $kept += '--verbose'
           $dest = -1
           for ($n = 0; $n -lt $kept.Count; $n++) { if ($kept[$n].Trim('"') -eq "--dest") { $dest = $n; break } }
-          if ($dest -ge 0) { $kept[$dest + 1] = '"' + "$env:GITHUB_WORKSPACE\out".Replace('\', '\\') + '"' }
+          if ($dest -ge 0) { $kept[$dest + 1] = '"' + "$env:GITHUB_WORKSPACE\out".Replace('\', '/') + '"' }
 
           $newArgs = "$env:GITHUB_WORKSPACE\jpackage-args.txt"
           Set-Content -Path $newArgs -Value $kept
