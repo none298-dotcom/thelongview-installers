@@ -318,11 +318,123 @@ jobs:
       # in its --resource-dir (windows/installer/overrides.wxi). The Compose plugin clears that
       # folder itself, so the EXE is built again here from the argument file Compose just wrote,
       # with the same arguments and one changed: the resource folder, with our file added.
-      # The uninstall step (windows/installer/overrides.wxi, which unregisters the widgets' identity
-      # package) is NOT in this build. Rebuilding the installer here with jpackage's own arguments
-      # reached WiX and died in light.exe with exit 204, and recovering from that left the signing
-      # step with nothing to sign. It is on the app repo's FIXLIST, to be done where it can be
-      # proven rather than bolted onto a release run.
+      - name: Build the app image the installer is rebuilt from
+        working-directory: android
+        shell: pwsh
+        run: ./gradlew.bat :desktop:createDistributable --no-daemon
+
+      - name: Rebuild the EXE with the uninstall step
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $appImage = Get-ChildItem "android/desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
+          if (-not $appImage) { throw "no app image" }
+          $argsFile = Get-ChildItem android/desktop/build/compose/tmp -Recurse -Filter "*.args.txt" |
+                      Where-Object { (Get-Content $_.FullName -Raw) -match '(?m)^"?--type"?\r?\n"?exe"?' } |
+                      Select-Object -First 1
+          if (-not $argsFile) { throw "no jpackage argument file builds an exe" }
+          $lines = Get-Content $argsFile.FullName
+
+          # Everything about the contents comes from the app image, so the options that describe how
+          # to build one are dropped; the rest is exactly what Compose asked for.
+          $drop = @("--input", "--main-jar", "--main-class", "--java-options", "--module-path", "--add-modules", "--runtime-image", "--app-content")
+          $kept = @()
+          for ($n = 0; $n -lt $lines.Count; $n++) {
+            $arg = $lines[$n].Trim('"')
+            if ($drop -contains $arg) { $n++; continue }
+            $kept += $lines[$n]
+          }
+
+          $mine = "$env:GITHUB_WORKSPACE\jpackage-resources"
+          New-Item -ItemType Directory -Force -Path $mine | Out-Null
+          # Compose writes its arguments quoted, so a plain IndexOf missed its --resource-dir and a
+          # second one was appended; jpackage took the last, which is Compose's, and logged "using
+          # default package resource overrides.wxi". Compare with the quotes stripped.
+          # EVERY occurrence: Compose passes --resource-dir twice, and jpackage takes the last, so
+          # replacing only the first left its own empty folder in charge and every resource came
+          # back "Using default package resource".
+          $found = $false
+          for ($n = 0; $n -lt $kept.Count - 1; $n++) {
+            if ($kept[$n].Trim('"') -ne "--resource-dir") { continue }
+            $found = $true
+            $current = $kept[$n + 1].Trim('"').Replace('\\', '\')
+            if (Test-Path $current) { Copy-Item "$current\*" -Destination $mine -Recurse -Force -EA SilentlyContinue }
+            $kept[$n + 1] = '"' + $mine.Replace('\', '/') + '"'
+          }
+          if (-not $found) { $kept += '--resource-dir'; $kept += '"' + $mine.Replace('\', '/') + '"' }
+          # The installer description, jpackage's own plus our uninstall step. Checked against the
+          # JDK in use before it is trusted: a JDK upgrade that changes main.wxs must fail here
+          # rather than quietly ship an installer built from an old description.
+          # A .jmod is a zip behind a four byte "JMOD" header, which .NET's zip reader refuses, so
+          # it is copied without those bytes first.
+          $jmod = "$env:GITHUB_WORKSPACE\jdk.jpackage.zip"
+          $bytes = [System.IO.File]::ReadAllBytes("$env:JAVA_HOME\jmods\jdk.jpackage.jmod")
+          [System.IO.File]::WriteAllBytes($jmod, $bytes[4..($bytes.Length - 1)])
+          $extract = "$env:GITHUB_WORKSPACE\jpackage-default"
+          Remove-Item $extract -Recurse -Force -EA SilentlyContinue
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          Add-Type -AssemblyName System.IO.Compression
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($jmod)
+          $entry = $zip.Entries | Where-Object { $_.FullName -like "*jdk/jpackage/internal/resources/main.wxs" } | Select-Object -First 1
+          if (-not $entry) {
+            $zip.Dispose()
+            Write-Host "::error::this JDK's jdk.jpackage module has no main.wxs to compare against"
+            exit 1
+          }
+          New-Item -ItemType Directory -Force -Path $extract | Out-Null
+          [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, "$extract\main.wxs", $true)
+          $zip.Dispose()
+          # Compared line by line from <Wix onwards, with our marked blocks dropped: that skips our
+          # own header comment and any difference in how the file starts.
+          function Strip([string[]] $lines) {
+            $out = @(); $skipping = $false; $started = $false
+            foreach ($line in $lines) {
+              if ($line -match 'TLV BEGIN') { $skipping = $true; continue }
+              if ($line -match 'TLV END') { $skipping = $false; continue }
+              if ($skipping) { continue }
+              if (-not $started) { if ($line -match '^<Wix') { $started = $true } else { continue } }
+              # Blank lines are dropped on both sides: removing the marked block leaves one behind,
+              # and a blank line is not a difference that matters in XML.
+              if ($line.Trim() -ne '') { $out += $line.TrimEnd() }
+            }
+            return ,$out
+          }
+          $ours = Strip (Get-Content windows/installer/main.wxs)
+          $theirs = Strip (Get-Content "$extract\main.wxs")
+          $difference = Compare-Object $ours $theirs
+          if ($difference) {
+            Write-Host "::error::windows/installer/main.wxs no longer matches this JDK's own main.wxs. Re-vendor it."
+            $difference | ForEach-Object { Write-Host "  $($_.SideIndicator) $($_.InputObject)" }
+            exit 1
+          }
+          Write-Host "main.wxs matches this JDK's, apart from the marked block"
+          Copy-Item windows/installer/main.wxs -Destination $mine -Force
+          Write-Host "resource dir holds: $((Get-ChildItem $mine | ForEach-Object Name) -join ', ')"
+          $kept += '--app-image'; $kept += '"' + $appImage.FullName.Replace('\', '\\') + '"'
+
+          # Passed as real arguments, not through an @argument file. Through the file every
+          # resource came back "Using default package resource", including ours, so jpackage was not
+          # reading the folder at all; PowerShell quotes each argument itself.
+          # Values come from an argument file, where backslashes are escaped; passed directly they
+          # must be plain again.
+          $argv = @()
+          for ($n = 0; $n -lt $kept.Count; $n++) { $argv += $kept[$n].Trim('"').Replace('\\', '\') }
+          Write-Host "--- arguments ---"; $argv | ForEach-Object { Write-Host "  $_" }
+          Push-Location $argsFile.Directory.FullName
+          $output = & "$env:JAVA_HOME\bin\jpackage.exe" @argv 2>&1
+          $code = $LASTEXITCODE
+          Pop-Location
+          $output | Select-Object -Last 15 | ForEach-Object { Write-Host "jpackage: $_" }
+          if (($output -join "`n") -notmatch "loaded from main.wxs") {
+            Write-Host "::error::jpackage did not take our main.wxs, so the uninstall step is not in the installer"
+          }
+          if ($code -ne 0) {
+            Write-Host "::error::the installer could not be rebuilt with the uninstall step"
+            exit 1
+          }
+          Write-Host "jpackage exit: $code"
+          Write-Host "produced: $((Get-ChildItem android/desktop/build/compose/binaries -Recurse -Filter *.exe | ForEach-Object Name) -join ', ')"
+
       - name: Find the installer
         id: find
         shell: pwsh
@@ -682,6 +794,37 @@ jobs:
           $snooze = "$env:APPDATA\TheLongView\snooze-until"
           if (Test-Path $snooze) { Write-Host "the app picked up the button: snooze-until $(Get-Content $snooze)" }
           else { Write-Host "::error::a toast button press did not reach the app (no snooze-until)"; exit 1 }
+
+      # Uninstalling has to take the widgets' identity package and the toast's protocol handler with
+      # it, through the custom action in windows/installer/main.wxs. Run last of the helper checks,
+      # because it removes the app.
+      - name: "Windows helper: uninstalling unregisters it"
+        shell: pwsh
+        run: |
+          $before = [bool](Get-AppxPackage LittleBirdTrading.TheLongView.Identity)
+          Write-Host "identity package before uninstall: $before"
+          $uninstall = Get-ChildItem (Split-Path "${{ steps.launch.outputs.exe }}") -Filter "unins*.exe" -EA SilentlyContinue | Select-Object -First 1
+          $product = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" -EA SilentlyContinue |
+                     Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -eq "The Long View" } | Select-Object -First 1
+          Stop-Process -Id ${{ steps.launch.outputs.pid }} -Force -EA SilentlyContinue
+          Start-Sleep -Seconds 3
+          if ($product) {
+            $code = Split-Path $product.PSPath -Leaf
+            Write-Host "uninstalling $code"
+            Start-Process msiexec.exe -ArgumentList "/x", $code, "/quiet", "/norestart" -Wait
+          } elseif ($uninstall) {
+            Start-Process $uninstall.FullName -ArgumentList "/quiet" -Wait
+          } else {
+            Write-Host "::warning::no uninstall entry found, so the uninstall step could not be checked"
+            exit 0
+          }
+          Start-Sleep -Seconds 5
+          $after = [bool](Get-AppxPackage LittleBirdTrading.TheLongView.Identity)
+          $scheme = [bool](Get-Item "HKCU:\Software\Classes\thelongview-reminder" -EA SilentlyContinue)
+          Write-Host "after uninstall: identity package $after, protocol handler $scheme"
+          if ($before -and $after) { Write-Host "::error::uninstalling left the widgets' identity package registered"; exit 1 }
+          if ($scheme) { Write-Host "::error::uninstalling left the toast's protocol handler registered"; exit 1 }
+          Write-Host "uninstall left nothing behind"
 
       # The build shipped with the stock Java placeholder in its title bar and in Alt+Tab, and
       # the owner has failed store submissions over exactly that before. It was caught by a
