@@ -997,7 +997,7 @@ jobs:
             Start-Process msiexec.exe -ArgumentList "/x", $Matches[0], "/quiet", "/norestart", "/l*v", "`"$msilog`"" -Wait
             if (Test-Path $msilog) {
               Write-Host "--- msi custom action ---"
-              Select-String -Path $msilog -Pattern 'TlvUnregister|LongViewHelper|Action start 1?[0-9:]*: InstallValidate|REMOVE =' |
+              Select-String -Path $msilog -Pattern 'TlvUnregister|LongViewHelper|Action start 1?[0-9:]*: InstallValidate|REMOVE =|RESTART MANAGER|RmShutdown|RmRestart|Restarting' |
                 ForEach-Object { Write-Host $_.Line }
             }
           } else {
@@ -1007,7 +1007,8 @@ jobs:
           Start-Sleep -Seconds 5
           $after = [bool](Get-AppxPackage LittleBirdTrading.TheLongView.Identity)
           $scheme = [bool](Get-Item "HKCU:\Software\Classes\thelongview-reminder" -EA SilentlyContinue)
-          Write-Host "after uninstall: identity package $after, protocol handler $scheme"
+          $stillUp = @(Get-Process "The Long View" -EA SilentlyContinue)
+          Write-Host "after uninstall: identity package $after, protocol handler $scheme, app processes $($stillUp.Count)"
           # WHERE it actually lives. HKCU:\Software\Classes is a MERGED view of the user's own
           # classes and HKLM's, so a key the helper really did delete from the user's hive can
           # still read as present here. These three lines say which it is.
