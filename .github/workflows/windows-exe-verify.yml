@@ -442,9 +442,12 @@ jobs:
         id: find
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path android/desktop/build/compose/binaries -Recurse -Filter *.exe |
+          # The installer folder only. Searching all of binaries/ picked up the app image's own
+          # launcher once the image started being built here, and then the signature check read an
+          # exe nobody had signed.
+          $exe = Get-ChildItem -Path android/desktop/build/compose/binaries/main/exe -Filter *.exe -EA SilentlyContinue |
                  Select-Object -First 1
-          if (-not $exe) { throw "No .exe produced" }
+          if (-not $exe) { throw "No installer .exe produced" }
           Write-Host "installer: $($exe.FullName)  ($([int]($exe.Length/1MB)) MB)"
           "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
 
