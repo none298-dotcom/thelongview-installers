@@ -322,66 +322,63 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host "argument files: $((Get-ChildItem android/desktop/build/compose/tmp -Recurse -Filter '*.args.txt' | ForEach-Object Name) -join ', ')"
-          # The one that builds the installer: it asks jpackage for type exe. Matching on the task
-          # name alone picked a different task's file, whose relative --input meant nothing here.
+          # Built from the app image, with jpackage's own arguments for everything else. Compose
+          # gives jpackage a folder of jars and clears it as soon as it has packaged, so its
+          # arguments cannot simply be replayed; the app image is a build output that stays.
+          & ./android/gradlew.bat -p android :desktop:createDistributable --no-daemon
+          if ($LASTEXITCODE -ne 0) { throw "createDistributable failed" }
+          $appImage = Get-ChildItem "android/desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
+          if (-not $appImage) { Write-Host "::warning::no app image; the uninstall step is not in this build"; exit 0 }
+
           $argsFile = Get-ChildItem android/desktop/build/compose/tmp -Recurse -Filter "*.args.txt" |
                       Where-Object { (Get-Content $_.FullName -Raw) -match '(?m)^"?--type"?\r?\n"?exe"?' } |
                       Select-Object -First 1
           if (-not $argsFile) { Write-Host "::warning::no jpackage argument file builds an exe; the uninstall step is not in this build"; exit 0 }
-          Write-Host "using $($argsFile.FullName)"
           $lines = Get-Content $argsFile.FullName
-          Write-Host "--- jpackage arguments ---"; $lines | ForEach-Object { Write-Host "  $_" }
-          $inputIndex = [Array]::IndexOf($lines, "--input")
-          if ($inputIndex -ge 0) {
-            $inputDir = $lines[$inputIndex + 1].Trim('"').Replace('\\', '\')
-            Write-Host "--input $inputDir exists: $(Test-Path $inputDir)"
-            # Compose clears that folder once it has packaged, so jpackage cannot be run again from
-            # its own arguments as they stand. The same jars are in the app image it built, under
-            # the same names, so the folder is put back from there.
-            if (-not (Test-Path $inputDir)) {
-              $appDir = Get-ChildItem "android/desktop/build/compose/binaries/main/app" -Directory |
-                        ForEach-Object { Join-Path $_.FullName "app" } | Where-Object { Test-Path $_ } | Select-Object -First 1
-              if (-not $appDir) { Write-Host "::warning::no app image to rebuild the input folder from"; exit 0 }
-              New-Item -ItemType Directory -Force -Path $inputDir | Out-Null
-              Copy-Item "$appDir\*.jar" -Destination $inputDir -Force
-              Write-Host "put back $((Get-ChildItem $inputDir -Filter *.jar).Count) jar(s) from the app image"
-            }
-            Write-Host ("  holds: " + ((Get-ChildItem $inputDir | ForEach-Object Name) -join ', '))
+
+          # Everything about the contents comes from the app image now, so the options that describe
+          # how to build one are dropped. The rest (name, version, vendor, icon, per-user install,
+          # shortcuts, upgrade uuid, destination) is kept exactly as Compose set it.
+          $drop = @("--input", "--main-jar", "--main-class", "--java-options", "--module-path", "--add-modules", "--runtime-image", "--app-content")
+          $kept = @()
+          for ($n = 0; $n -lt $lines.Count; $n++) {
+            $arg = $lines[$n].Trim('"')
+            if ($drop -contains $arg) { $n++; continue }
+            $kept += $lines[$n]
           }
-          $i = [Array]::IndexOf($lines, "--resource-dir")
-          if ($i -lt 0) { Write-Host "::warning::jpackage was not given a resource dir; the uninstall step is not in this build"; exit 0 }
-          # jpackage argument files escape backslashes, so every path in there is doubled. Undo that
-          # to touch the folder, and double our own on the way back in: writing a single-backslash
-          # path corrupted the arguments after it, which is what "the configured main jar does not
-          # exist" actually meant.
-          $current = $lines[$i + 1].Trim('"').Replace('\\', '\')
           $mine = "$env:GITHUB_WORKSPACE\jpackage-resources"
           Remove-Item $mine -Recurse -Force -EA SilentlyContinue
           New-Item -ItemType Directory -Force -Path $mine | Out-Null
-          if (Test-Path $current) { Copy-Item "$current\*" -Destination $mine -Recurse -Force }
+          $r = [Array]::IndexOf($kept, "--resource-dir")
+          if ($r -ge 0) {
+            $current = $kept[$r + 1].Trim('"').Replace('\\', '\')
+            if (Test-Path $current) { Copy-Item "$current\*" -Destination $mine -Recurse -Force }
+            $kept[$r + 1] = '"' + $mine.Replace('\', '\\') + '"'
+          } else {
+            $kept += '--resource-dir'
+            $kept += '"' + $mine.Replace('\', '\\') + '"'
+          }
           Copy-Item windows/installer/overrides.wxi -Destination $mine -Force
-          $lines[$i + 1] = '"' + $mine.Replace('\', '\\') + '"'
-          $newArgs = "$env:GITHUB_WORKSPACE\jpackage-args.txt"
-          Set-Content -Path $newArgs -Value $lines
-          # Keep the installer Compose just built: if the rebuild fails, it is put back, rather than
-          # spending another Gradle build to get it again.
-          $built = Get-ChildItem android/desktop/build/compose/binaries -Recurse -Filter *.exe
+          $kept += '--app-image'
+          $kept += '"' + $appImage.FullName.Replace('\', '\\') + '"'
+
           $keep = "$env:GITHUB_WORKSPACE\installer-backup"
           New-Item -ItemType Directory -Force -Path $keep | Out-Null
+          $built = @(Get-ChildItem android/desktop/build/compose/binaries -Recurse -Filter *.exe)
           $built | ForEach-Object { Copy-Item $_.FullName -Destination $keep -Force; Remove-Item $_.FullName -Force }
-          # From the folder Compose runs jpackage in: some arguments in that file are relative to it.
+
+          $newArgs = "$env:GITHUB_WORKSPACE\jpackage-args.txt"
+          Set-Content -Path $newArgs -Value $kept
           Push-Location $argsFile.Directory.FullName
           & "$env:JAVA_HOME\bin\jpackage.exe" "@$newArgs"
           $code = $LASTEXITCODE
           Pop-Location
-          if ($code -ne 0) {
-            # Not fatal yet: the rest of the run still verifies the installer Compose built, which
-            # is the same installer without the uninstall step.
+          if ($code -ne 0 -or -not (Get-ChildItem android/desktop/build/compose/binaries -Recurse -Filter *.exe)) {
             Write-Host "::warning::jpackage exited $code rebuilding with the uninstall step; keeping Compose's own installer, which has everything except that step"
-            Get-ChildItem $keep -Filter *.exe | ForEach-Object { Copy-Item $_.FullName -Destination $built[0].DirectoryName -Force }
+            Write-Host "--- arguments used ---"; $kept | ForEach-Object { Write-Host "  $_" }
+            if ($built.Count -gt 0) { Get-ChildItem $keep -Filter *.exe | ForEach-Object { Copy-Item $_.FullName -Destination $built[0].DirectoryName -Force } }
           } else {
-            Write-Host "rebuilt with overrides.wxi from $mine"
+            Write-Host "rebuilt with overrides.wxi, so uninstalling unregisters the helper"
           }
 
       - name: Find the installer
