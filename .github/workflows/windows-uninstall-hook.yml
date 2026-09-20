@@ -74,18 +74,18 @@ jobs:
           # Compose writes its arguments quoted, so a plain IndexOf missed its --resource-dir and a
           # second one was appended; jpackage took the last, which is Compose's, and logged "using
           # default package resource overrides.wxi". Compare with the quotes stripped.
-          $r = -1
-          for ($n = 0; $n -lt $kept.Count; $n++) { if ($kept[$n].Trim('"') -eq "--resource-dir") { $r = $n; break } }
-          if ($r -ge 0) {
-            $current = $kept[$r + 1].Trim('"').Replace('\\', '\')
-            if (Test-Path $current) { Copy-Item "$current\*" -Destination $mine -Recurse -Force }
-            # Forward slashes, not escaped backslashes: Java takes them on Windows, and an
-            # argument file treats a backslash as an escape, which is how the first attempt
-            # corrupted the arguments after it.
-            $kept[$r + 1] = '"' + $mine.Replace('\', '/') + '"'
-          } else {
-            $kept += '--resource-dir'; $kept += '"' + $mine.Replace('\', '/') + '"'
+          # EVERY occurrence: Compose passes --resource-dir twice, and jpackage takes the last, so
+          # replacing only the first left its own empty folder in charge and every resource came
+          # back "Using default package resource".
+          $found = $false
+          for ($n = 0; $n -lt $kept.Count - 1; $n++) {
+            if ($kept[$n].Trim('"') -ne "--resource-dir") { continue }
+            $found = $true
+            $current = $kept[$n + 1].Trim('"').Replace('\\', '\')
+            if (Test-Path $current) { Copy-Item "$current\*" -Destination $mine -Recurse -Force -EA SilentlyContinue }
+            $kept[$n + 1] = '"' + $mine.Replace('\', '/') + '"'
           }
+          if (-not $found) { $kept += '--resource-dir'; $kept += '"' + $mine.Replace('\', '/') + '"' }
           Copy-Item windows/installer/overrides.wxi -Destination $mine -Force
           Write-Host "resource dir holds: $((Get-ChildItem $mine | ForEach-Object Name) -join ', ')"
           $kept += '--app-image'; $kept += '"' + $appImage.FullName.Replace('\', '\\') + '"'
@@ -97,8 +97,10 @@ jobs:
           # Passed as real arguments, not through an @argument file. Through the file every
           # resource came back "Using default package resource", including ours, so jpackage was not
           # reading the folder at all; PowerShell quotes each argument itself.
+          # Values come from an argument file, where backslashes are escaped; passed directly they
+          # must be plain again.
           $argv = @()
-          for ($n = 0; $n -lt $kept.Count; $n++) { $argv += $kept[$n].Trim('"') }
+          for ($n = 0; $n -lt $kept.Count; $n++) { $argv += $kept[$n].Trim('"').Replace('\\', '\') }
           Write-Host "--- arguments ---"; $argv | ForEach-Object { Write-Host "  $_" }
           Push-Location $argsFile.Directory.FullName
           $output = & "$env:JAVA_HOME\bin\jpackage.exe" @argv 2>&1
