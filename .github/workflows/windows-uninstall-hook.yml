@@ -71,7 +71,11 @@ jobs:
 
           $mine = "$env:GITHUB_WORKSPACE\jpackage-resources"
           New-Item -ItemType Directory -Force -Path $mine | Out-Null
-          $r = [Array]::IndexOf($kept, "--resource-dir")
+          # Compose writes its arguments quoted, so a plain IndexOf missed its --resource-dir and a
+          # second one was appended; jpackage took the last, which is Compose's, and logged "using
+          # default package resource overrides.wxi". Compare with the quotes stripped.
+          $r = -1
+          for ($n = 0; $n -lt $kept.Count; $n++) { if ($kept[$n].Trim('"') -eq "--resource-dir") { $r = $n; break } }
           if ($r -ge 0) {
             $current = $kept[$r + 1].Trim('"').Replace('\\', '\')
             if (Test-Path $current) { Copy-Item "$current\*" -Destination $mine -Recurse -Force }
@@ -83,7 +87,8 @@ jobs:
           Write-Host "resource dir holds: $((Get-ChildItem $mine | ForEach-Object Name) -join ', ')"
           $kept += '--app-image'; $kept += '"' + $appImage.FullName.Replace('\', '\\') + '"'
           $kept += '--verbose'
-          $dest = [Array]::IndexOf($kept, "--dest")
+          $dest = -1
+          for ($n = 0; $n -lt $kept.Count; $n++) { if ($kept[$n].Trim('"') -eq "--dest") { $dest = $n; break } }
           if ($dest -ge 0) { $kept[$dest + 1] = '"' + "$env:GITHUB_WORKSPACE\out".Replace('\', '\\') + '"' }
 
           $newArgs = "$env:GITHUB_WORKSPACE\jpackage-args.txt"
@@ -94,6 +99,9 @@ jobs:
           $code = $LASTEXITCODE
           Pop-Location
           $output | ForEach-Object { Write-Host "jpackage: $_" }
+          if (($output -join "`n") -notmatch "custom package resource overrides.wxi") {
+            Write-Host "::error::jpackage did not take our overrides.wxi, so the uninstall step is not in the installer"
+          }
           Write-Host "jpackage exit: $code"
           Write-Host "produced: $((Get-ChildItem "$env:GITHUB_WORKSPACE\out" -EA SilentlyContinue | ForEach-Object Name) -join ', ')"
 
