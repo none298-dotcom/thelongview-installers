@@ -336,7 +336,18 @@ jobs:
           if ($inputIndex -ge 0) {
             $inputDir = $lines[$inputIndex + 1].Trim('"').Replace('\\', '\')
             Write-Host "--input $inputDir exists: $(Test-Path $inputDir)"
-            if (Test-Path $inputDir) { Write-Host ("  holds: " + ((Get-ChildItem $inputDir | ForEach-Object Name) -join ', ')) }
+            # Compose clears that folder once it has packaged, so jpackage cannot be run again from
+            # its own arguments as they stand. The same jars are in the app image it built, under
+            # the same names, so the folder is put back from there.
+            if (-not (Test-Path $inputDir)) {
+              $appDir = Get-ChildItem "android/desktop/build/compose/binaries/main/app" -Directory |
+                        ForEach-Object { Join-Path $_.FullName "app" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+              if (-not $appDir) { Write-Host "::warning::no app image to rebuild the input folder from"; exit 0 }
+              New-Item -ItemType Directory -Force -Path $inputDir | Out-Null
+              Copy-Item "$appDir\*.jar" -Destination $inputDir -Force
+              Write-Host "put back $((Get-ChildItem $inputDir -Filter *.jar).Count) jar(s) from the app image"
+            }
+            Write-Host ("  holds: " + ((Get-ChildItem $inputDir | ForEach-Object Name) -join ', '))
           }
           $i = [Array]::IndexOf($lines, "--resource-dir")
           if ($i -lt 0) { Write-Host "::warning::jpackage was not given a resource dir; the uninstall step is not in this build"; exit 0 }
