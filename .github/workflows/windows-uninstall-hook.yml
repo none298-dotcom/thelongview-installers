@@ -86,7 +86,30 @@ jobs:
             $kept[$n + 1] = '"' + $mine.Replace('\', '/') + '"'
           }
           if (-not $found) { $kept += '--resource-dir'; $kept += '"' + $mine.Replace('\', '/') + '"' }
-          Copy-Item windows/installer/overrides.wxi -Destination $mine -Force
+          # The installer description, jpackage's own plus our uninstall step. Checked against the
+          # JDK in use before it is trusted: a JDK upgrade that changes main.wxs must fail here
+          # rather than quietly ship an installer built from an old description.
+          $jmod = "$env:JAVA_HOME\jmods\jdk.jpackage.jmod"
+          $extract = "$env:GITHUB_WORKSPACE\jpackage-default"
+          Remove-Item $extract -Recurse -Force -EA SilentlyContinue
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($jmod)
+          $entry = $zip.Entries | Where-Object { $_.FullName -like "*jdk/jpackage/internal/resources/main.wxs" } | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path $extract | Out-Null
+          [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, "$extract\main.wxs", $true)
+          $zip.Dispose()
+          $ours = (Get-Content windows/installer/main.wxs -Raw) -replace '(?s)<!--\s*TLV BEGIN.*?TLV END\s*-->\r?\n?', '' -replace '(?s)^<\?xml[^>]*\?>\r?\n<!--.*?-->\r?\n', ''
+          $theirs = (Get-Content "$extract\main.wxs" -Raw) -replace '(?s)^<\?xml[^>]*\?>\r?\n', ''
+          $normalise = { param($t) ($t -replace '\r\n', "`n").TrimEnd() }
+          if ((& $normalise $ours) -ne (& $normalise $theirs)) {
+            Write-Host "::error::windows/installer/main.wxs no longer matches this JDK's own main.wxs. Re-vendor it."
+            Set-Content "$env:GITHUB_WORKSPACE\ours.wxs" (& $normalise $ours)
+            Set-Content "$env:GITHUB_WORKSPACE\theirs.wxs" (& $normalise $theirs)
+            (Compare-Object (Get-Content "$env:GITHUB_WORKSPACE\ours.wxs") (Get-Content "$env:GITHUB_WORKSPACE\theirs.wxs")) | ForEach-Object { Write-Host "  $($_.SideIndicator) $($_.InputObject)" }
+            exit 1
+          }
+          Write-Host "main.wxs matches this JDK's, apart from the marked block"
+          Copy-Item windows/installer/main.wxs -Destination $mine -Force
           Write-Host "resource dir holds: $((Get-ChildItem $mine | ForEach-Object Name) -join ', ')"
           $kept += '--app-image'; $kept += '"' + $appImage.FullName.Replace('\', '\\') + '"'
           $kept += '--verbose'
@@ -107,8 +130,8 @@ jobs:
           $code = $LASTEXITCODE
           Pop-Location
           $output | ForEach-Object { Write-Host "jpackage: $_" }
-          if (($output -join "`n") -notmatch "loaded from overrides.wxi") {
-            Write-Host "::error::jpackage did not take our overrides.wxi, so the uninstall step is not in the installer"
+          if (($output -join "`n") -notmatch "loaded from main.wxs") {
+            Write-Host "::error::jpackage did not take our main.wxs, so the uninstall step is not in the installer"
           }
           Write-Host "jpackage exit: $code"
           Write-Host "produced: $((Get-ChildItem "$env:GITHUB_WORKSPACE\out" -EA SilentlyContinue | ForEach-Object Name) -join ', ')"
@@ -120,7 +143,7 @@ jobs:
         run: |
           Get-ChildItem $env:TEMP -Filter "jdk.jpackage*" -Directory -EA SilentlyContinue | ForEach-Object {
             Write-Host "=== $($_.FullName) ==="
-            Get-ChildItem $_.FullName -Recurse -Include main.wxs, overrides.wxi, *.log -EA SilentlyContinue | ForEach-Object {
+            Get-ChildItem $_.FullName -Recurse -Include main.wxs, *.log -EA SilentlyContinue | ForEach-Object {
               Write-Host "--- $($_.FullName) ---"
               Get-Content $_.FullName
             }
