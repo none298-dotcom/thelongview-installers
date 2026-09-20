@@ -990,7 +990,16 @@ jobs:
           Start-Sleep -Seconds 3
           Write-Host "uninstalling with: $($entry.UninstallString)"
           if ($entry.UninstallString -match '\{[0-9A-Fa-f-]{36}\}') {
-            Start-Process msiexec.exe -ArgumentList "/x", $Matches[0], "/quiet", "/norestart" -Wait
+            # VERBOSE, and the custom action's lines printed below. Return="ignore" means the
+            # uninstall says nothing when our action fails or is skipped, and two runs were spent
+            # guessing at that silence.
+            $msilog = "$env:RUNNER_TEMP\uninstall.log"
+            Start-Process msiexec.exe -ArgumentList "/x", $Matches[0], "/quiet", "/norestart", "/l*v", "`"$msilog`"" -Wait
+            if (Test-Path $msilog) {
+              Write-Host "--- msi custom action ---"
+              Select-String -Path $msilog -Pattern 'TlvUnregister|LongViewHelper|Action start 1?[0-9:]*: InstallValidate|REMOVE =' |
+                ForEach-Object { Write-Host $_.Line }
+            }
           } else {
             $exe, $rest = $entry.UninstallString -split ' ', 2
             Start-Process ($exe.Trim('"')) -ArgumentList "/quiet" -Wait
