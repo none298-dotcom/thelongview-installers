@@ -999,6 +999,10 @@ jobs:
           $after = [bool](Get-AppxPackage LittleBirdTrading.TheLongView.Identity)
           $scheme = [bool](Get-Item "HKCU:\Software\Classes\thelongview-reminder" -EA SilentlyContinue)
           Write-Host "after uninstall: identity package $after, protocol handler $scheme"
+          # The helper writes why it gave up here and nowhere else, and the first failure of this
+          # check cost a whole run to work out for want of these four lines.
+          $log = "$env:APPDATA\TheLongView\helper.log"
+          if (Test-Path $log) { Write-Host "--- helper.log ---"; Get-Content $log }
           if ($before -and $after) { Write-Host "::error::uninstalling left the widgets' identity package registered"; exit 1 }
           if ($scheme) { Write-Host "::error::uninstalling left the toast's protocol handler registered"; exit 1 }
           Write-Host "uninstall left nothing behind"
