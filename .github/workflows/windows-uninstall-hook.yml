@@ -107,7 +107,7 @@ jobs:
           $code = $LASTEXITCODE
           Pop-Location
           $output | ForEach-Object { Write-Host "jpackage: $_" }
-          if (($output -join "`n") -notmatch "custom package resource overrides.wxi") {
+          if (($output -join "`n") -notmatch "loaded from overrides.wxi") {
             Write-Host "::error::jpackage did not take our overrides.wxi, so the uninstall step is not in the installer"
           }
           Write-Host "jpackage exit: $code"
@@ -120,8 +120,8 @@ jobs:
         run: |
           Get-ChildItem $env:TEMP -Filter "jdk.jpackage*" -Directory -EA SilentlyContinue | ForEach-Object {
             Write-Host "=== $($_.FullName) ==="
-            Get-ChildItem $_.FullName -Recurse -Include *.wxs, *.wxi, *.log -EA SilentlyContinue | ForEach-Object {
+            Get-ChildItem $_.FullName -Recurse -Include main.wxs, overrides.wxi, *.log -EA SilentlyContinue | ForEach-Object {
               Write-Host "--- $($_.FullName) ---"
-              if ($_.Extension -eq ".log") { Get-Content $_.FullName -Tail 40 }
+              Get-Content $_.FullName
             }
           }
