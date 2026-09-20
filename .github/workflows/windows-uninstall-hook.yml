@@ -117,7 +117,9 @@ jobs:
               if ($line -match 'TLV END') { $skipping = $false; continue }
               if ($skipping) { continue }
               if (-not $started) { if ($line -match '^<Wix') { $started = $true } else { continue } }
-              $out += $line.TrimEnd()
+              # Blank lines are dropped on both sides: removing the marked block leaves one behind,
+              # and a blank line is not a difference that matters in XML.
+              if ($line.Trim() -ne '') { $out += $line.TrimEnd() }
             }
             return ,$out
           }
