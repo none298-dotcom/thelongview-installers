@@ -370,9 +370,10 @@ jobs:
           $newArgs = "$env:GITHUB_WORKSPACE\jpackage-args.txt"
           Set-Content -Path $newArgs -Value $kept
           Push-Location $argsFile.Directory.FullName
-          & "$env:JAVA_HOME\bin\jpackage.exe" "@$newArgs"
+          $output = & "$env:JAVA_HOME\bin\jpackage.exe" "@$newArgs" 2>&1
           $code = $LASTEXITCODE
           Pop-Location
+          $output | ForEach-Object { Write-Host "  jpackage: $_" }
           if ($code -ne 0 -or -not (Get-ChildItem android/desktop/build/compose/binaries -Recurse -Filter *.exe)) {
             Write-Host "::warning::jpackage exited $code rebuilding with the uninstall step; keeping Compose's own installer, which has everything except that step"
             Write-Host "--- arguments used ---"; $kept | ForEach-Object { Write-Host "  $_" }
@@ -380,6 +381,9 @@ jobs:
           } else {
             Write-Host "rebuilt with overrides.wxi, so uninstalling unregisters the helper"
           }
+          # The step's own result: a failed rebuild is a warning, not a failed verification. Without
+          # this the step inherits jpackage's exit code and fails the run after recovering from it.
+          exit 0
 
       - name: Find the installer
         id: find
