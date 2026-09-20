@@ -1008,6 +1008,19 @@ jobs:
           $after = [bool](Get-AppxPackage LittleBirdTrading.TheLongView.Identity)
           $scheme = [bool](Get-Item "HKCU:\Software\Classes\thelongview-reminder" -EA SilentlyContinue)
           Write-Host "after uninstall: identity package $after, protocol handler $scheme"
+          # WHERE it actually lives. HKCU:\Software\Classes is a MERGED view of the user's own
+          # classes and HKLM's, so a key the helper really did delete from the user's hive can
+          # still read as present here. These three lines say which it is.
+          foreach ($k in @("Registry::HKEY_CURRENT_USER\Software\Classes\thelongview-reminder",
+                           "HKLM:\Software\Classes\thelongview-reminder",
+                           "HKCR:\thelongview-reminder")) {
+            $found = Get-Item $k -EA SilentlyContinue
+            Write-Host ("  {0}: {1}" -f $k, [bool]$found)
+            if ($found) {
+              $cmd = Get-ItemProperty "$k\shell\open\command" -EA SilentlyContinue
+              Write-Host ("    command: {0}" -f $cmd.'(default)')
+            }
+          }
           # The helper writes why it gave up here and nowhere else, and the first failure of this
           # check cost a whole run to work out for want of these four lines.
           # Both copies: the uninstaller's custom action runs as SYSTEM, whose %APPDATA% is not
