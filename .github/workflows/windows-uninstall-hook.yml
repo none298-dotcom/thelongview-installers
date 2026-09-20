@@ -89,12 +89,22 @@ jobs:
           # The installer description, jpackage's own plus our uninstall step. Checked against the
           # JDK in use before it is trusted: a JDK upgrade that changes main.wxs must fail here
           # rather than quietly ship an installer built from an old description.
-          $jmod = "$env:JAVA_HOME\jmods\jdk.jpackage.jmod"
+          # A .jmod is a zip behind a four byte "JMOD" header, which .NET's zip reader refuses, so
+          # it is copied without those bytes first.
+          $jmod = "$env:GITHUB_WORKSPACE\jdk.jpackage.zip"
+          $bytes = [System.IO.File]::ReadAllBytes("$env:JAVA_HOME\jmods\jdk.jpackage.jmod")
+          [System.IO.File]::WriteAllBytes($jmod, $bytes[4..($bytes.Length - 1)])
           $extract = "$env:GITHUB_WORKSPACE\jpackage-default"
           Remove-Item $extract -Recurse -Force -EA SilentlyContinue
           Add-Type -AssemblyName System.IO.Compression.FileSystem
+          Add-Type -AssemblyName System.IO.Compression
           $zip = [System.IO.Compression.ZipFile]::OpenRead($jmod)
           $entry = $zip.Entries | Where-Object { $_.FullName -like "*jdk/jpackage/internal/resources/main.wxs" } | Select-Object -First 1
+          if (-not $entry) {
+            $zip.Dispose()
+            Write-Host "::error::this JDK's jdk.jpackage module has no main.wxs to compare against"
+            exit 1
+          }
           New-Item -ItemType Directory -Force -Path $extract | Out-Null
           [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, "$extract\main.wxs", $true)
           $zip.Dispose()
