@@ -801,37 +801,6 @@ jobs:
           if (Test-Path $snooze) { Write-Host "the app picked up the button: snooze-until $(Get-Content $snooze)" }
           else { Write-Host "::error::a toast button press did not reach the app (no snooze-until)"; exit 1 }
 
-      # Uninstalling has to take the widgets' identity package and the toast's protocol handler with
-      # it, through the custom action in windows/installer/main.wxs. Run last of the helper checks,
-      # because it removes the app.
-      - name: "Windows helper: uninstalling unregisters it"
-        shell: pwsh
-        run: |
-          $before = [bool](Get-AppxPackage LittleBirdTrading.TheLongView.Identity)
-          Write-Host "identity package before uninstall: $before"
-          $uninstall = Get-ChildItem (Split-Path "${{ steps.launch.outputs.exe }}") -Filter "unins*.exe" -EA SilentlyContinue | Select-Object -First 1
-          $product = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" -EA SilentlyContinue |
-                     Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -eq "The Long View" } | Select-Object -First 1
-          Stop-Process -Id ${{ steps.launch.outputs.pid }} -Force -EA SilentlyContinue
-          Start-Sleep -Seconds 3
-          if ($product) {
-            $code = Split-Path $product.PSPath -Leaf
-            Write-Host "uninstalling $code"
-            Start-Process msiexec.exe -ArgumentList "/x", $code, "/quiet", "/norestart" -Wait
-          } elseif ($uninstall) {
-            Start-Process $uninstall.FullName -ArgumentList "/quiet" -Wait
-          } else {
-            Write-Host "::warning::no uninstall entry found, so the uninstall step could not be checked"
-            exit 0
-          }
-          Start-Sleep -Seconds 5
-          $after = [bool](Get-AppxPackage LittleBirdTrading.TheLongView.Identity)
-          $scheme = [bool](Get-Item "HKCU:\Software\Classes\thelongview-reminder" -EA SilentlyContinue)
-          Write-Host "after uninstall: identity package $after, protocol handler $scheme"
-          if ($before -and $after) { Write-Host "::error::uninstalling left the widgets' identity package registered"; exit 1 }
-          if ($scheme) { Write-Host "::error::uninstalling left the toast's protocol handler registered"; exit 1 }
-          Write-Host "uninstall left nothing behind"
-
       # The build shipped with the stock Java placeholder in its title bar and in Alt+Tab, and
       # the owner has failed store submissions over exactly that before. It was caught by a
       # human looking at a screenshot. It is checked here now.
@@ -996,6 +965,43 @@ jobs:
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           $bmp.Save("artifacts/installed-app.png")
           Write-Host "screenshot saved, $($b.Width)x$($b.Height)"
+
+      # Uninstalling has to take the widgets' identity package and the toast's protocol handler with
+      # it, through the custom action in windows/installer/main.wxs. LAST of the app checks, because
+      # it removes the app: an earlier attempt ran before them and pulled the app out from under the
+      # icon check.
+      - name: "Windows helper: uninstalling unregisters it"
+        shell: pwsh
+        run: |
+          $before = [bool](Get-AppxPackage LittleBirdTrading.TheLongView.Identity)
+          Write-Host "identity package before uninstall: $before"
+          # Either hive, the same lookup the certification step uses: jpackage writes the entry to
+          # HKLM when an administrator runs a per-user install, which is what this runner does.
+          $entry = $null
+          foreach ($k in @('HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                           'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                           'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
+            $entry = Get-ItemProperty $k -ErrorAction SilentlyContinue |
+                     Where-Object { $_.DisplayName -like '*Long View*' } | Select-Object -First 1
+            if ($entry) { break }
+          }
+          if (-not $entry) { Write-Host "::error::no uninstall entry to run"; exit 1 }
+          Stop-Process -Id ${{ steps.launch.outputs.pid }} -Force -EA SilentlyContinue
+          Start-Sleep -Seconds 3
+          Write-Host "uninstalling with: $($entry.UninstallString)"
+          if ($entry.UninstallString -match '\{[0-9A-Fa-f-]{36}\}') {
+            Start-Process msiexec.exe -ArgumentList "/x", $Matches[0], "/quiet", "/norestart" -Wait
+          } else {
+            $exe, $rest = $entry.UninstallString -split ' ', 2
+            Start-Process ($exe.Trim('"')) -ArgumentList "/quiet" -Wait
+          }
+          Start-Sleep -Seconds 5
+          $after = [bool](Get-AppxPackage LittleBirdTrading.TheLongView.Identity)
+          $scheme = [bool](Get-Item "HKCU:\Software\Classes\thelongview-reminder" -EA SilentlyContinue)
+          Write-Host "after uninstall: identity package $after, protocol handler $scheme"
+          if ($before -and $after) { Write-Host "::error::uninstalling left the widgets' identity package registered"; exit 1 }
+          if ($scheme) { Write-Host "::error::uninstalling left the toast's protocol handler registered"; exit 1 }
+          Write-Host "uninstall left nothing behind"
 
       - name: Collect Windows Application event log
         if: always()
