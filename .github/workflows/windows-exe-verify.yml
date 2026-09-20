@@ -318,73 +318,11 @@ jobs:
       # in its --resource-dir (windows/installer/overrides.wxi). The Compose plugin clears that
       # folder itself, so the EXE is built again here from the argument file Compose just wrote,
       # with the same arguments and one changed: the resource folder, with our file added.
-      - name: Rebuild the EXE with the uninstall step
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # Built from the app image, with jpackage's own arguments for everything else. Compose
-          # gives jpackage a folder of jars and clears it as soon as it has packaged, so its
-          # arguments cannot simply be replayed; the app image is a build output that stays.
-          & ./android/gradlew.bat -p android :desktop:createDistributable --no-daemon
-          if ($LASTEXITCODE -ne 0) { throw "createDistributable failed" }
-          $appImage = Get-ChildItem "android/desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
-          if (-not $appImage) { Write-Host "::warning::no app image; the uninstall step is not in this build"; exit 0 }
-
-          $argsFile = Get-ChildItem android/desktop/build/compose/tmp -Recurse -Filter "*.args.txt" |
-                      Where-Object { (Get-Content $_.FullName -Raw) -match '(?m)^"?--type"?\r?\n"?exe"?' } |
-                      Select-Object -First 1
-          if (-not $argsFile) { Write-Host "::warning::no jpackage argument file builds an exe; the uninstall step is not in this build"; exit 0 }
-          $lines = Get-Content $argsFile.FullName
-
-          # Everything about the contents comes from the app image now, so the options that describe
-          # how to build one are dropped. The rest (name, version, vendor, icon, per-user install,
-          # shortcuts, upgrade uuid, destination) is kept exactly as Compose set it.
-          $drop = @("--input", "--main-jar", "--main-class", "--java-options", "--module-path", "--add-modules", "--runtime-image", "--app-content")
-          $kept = @()
-          for ($n = 0; $n -lt $lines.Count; $n++) {
-            $arg = $lines[$n].Trim('"')
-            if ($drop -contains $arg) { $n++; continue }
-            $kept += $lines[$n]
-          }
-          $mine = "$env:GITHUB_WORKSPACE\jpackage-resources"
-          Remove-Item $mine -Recurse -Force -EA SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $mine | Out-Null
-          $r = [Array]::IndexOf($kept, "--resource-dir")
-          if ($r -ge 0) {
-            $current = $kept[$r + 1].Trim('"').Replace('\\', '\')
-            if (Test-Path $current) { Copy-Item "$current\*" -Destination $mine -Recurse -Force }
-            $kept[$r + 1] = '"' + $mine.Replace('\', '\\') + '"'
-          } else {
-            $kept += '--resource-dir'
-            $kept += '"' + $mine.Replace('\', '\\') + '"'
-          }
-          Copy-Item windows/installer/overrides.wxi -Destination $mine -Force
-          $kept += '--app-image'
-          $kept += '"' + $appImage.FullName.Replace('\', '\\') + '"'
-
-          $keep = "$env:GITHUB_WORKSPACE\installer-backup"
-          New-Item -ItemType Directory -Force -Path $keep | Out-Null
-          $built = @(Get-ChildItem android/desktop/build/compose/binaries -Recurse -Filter *.exe)
-          $built | ForEach-Object { Copy-Item $_.FullName -Destination $keep -Force; Remove-Item $_.FullName -Force }
-
-          $newArgs = "$env:GITHUB_WORKSPACE\jpackage-args.txt"
-          Set-Content -Path $newArgs -Value $kept
-          Push-Location $argsFile.Directory.FullName
-          $output = & "$env:JAVA_HOME\bin\jpackage.exe" "@$newArgs" 2>&1
-          $code = $LASTEXITCODE
-          Pop-Location
-          $output | ForEach-Object { Write-Host "  jpackage: $_" }
-          if ($code -ne 0 -or -not (Get-ChildItem android/desktop/build/compose/binaries -Recurse -Filter *.exe)) {
-            Write-Host "::warning::jpackage exited $code rebuilding with the uninstall step; keeping Compose's own installer, which has everything except that step"
-            Write-Host "--- arguments used ---"; $kept | ForEach-Object { Write-Host "  $_" }
-            if ($built.Count -gt 0) { Get-ChildItem $keep -Filter *.exe | ForEach-Object { Copy-Item $_.FullName -Destination $built[0].DirectoryName -Force } }
-          } else {
-            Write-Host "rebuilt with overrides.wxi, so uninstalling unregisters the helper"
-          }
-          # The step's own result: a failed rebuild is a warning, not a failed verification. Without
-          # this the step inherits jpackage's exit code and fails the run after recovering from it.
-          exit 0
-
+      # The uninstall step (windows/installer/overrides.wxi, which unregisters the widgets' identity
+      # package) is NOT in this build. Rebuilding the installer here with jpackage's own arguments
+      # reached WiX and died in light.exe with exit 204, and recovering from that left the signing
+      # step with nothing to sign. It is on the app repo's FIXLIST, to be done where it can be
+      # proven rather than bolted onto a release run.
       - name: Find the installer
         id: find
         shell: pwsh
