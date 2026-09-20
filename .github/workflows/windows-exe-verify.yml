@@ -315,9 +315,12 @@ jobs:
 
       # Uninstalling must also unregister the widgets' identity package and the toast's protocol
       # handler, or both outlive the files. jpackage's supported hook for that is an overrides.wxi
-      # in its --resource-dir (windows/installer/overrides.wxi). The Compose plugin clears that
-      # folder itself, so the EXE is built again here from the argument file Compose just wrote,
-      # with the same arguments and one changed: the resource folder, with our file added.
+      # The uninstall step: uninstalling has to take away the widgets' identity package and the
+      # reminder toast's protocol handler, or a machine that removed the app still offers its
+      # widgets. That lives in windows/installer/main.wxs, jpackage's own installer description
+      # with one marked block added (its overrides.wxi hook is included where WiX refuses a custom
+      # action). The Compose plugin clears jpackage's resource folder itself, so the installer is
+      # built once more here from the app image, with Compose's own arguments and that file.
       - name: Build the app image the installer is rebuilt from
         working-directory: android
         shell: pwsh
