@@ -1,0 +1,111 @@
+# Getting the uninstall step into the Windows installer, on its own.
+#
+# The app registers a sparse identity package for the Windows 11 widgets and a protocol handler for
+# the reminder toast's buttons. Uninstalling has to take both away again, or a machine that removed
+# the app still offers its widgets. jpackage's supported hook for that is an `overrides.wxi` in its
+# `--resource-dir` (windows/installer/overrides.wxi in the app repo), which its main.wxs includes.
+#
+# The Compose Gradle plugin clears jpackage's resource folder itself, so the installer has to be
+# built again from the app image with Compose's own arguments. That attempt died inside WiX with
+# `light.exe ... exited with 204` and no message, which is what this workflow exists to read: it
+# runs the same thing with --verbose and prints everything.
+#
+# Deliberately NOT part of windows-exe-verify.yml. Bolting an unproven step onto the release run
+# already cost one: recovering from the failure left the signing step with nothing to sign.
+name: Windows uninstall hook (experiment)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch or commit sha of thelongview-app to build"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the private source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: none298-dotcom/thelongview-app
+          ref: ${{ inputs.source_ref }}
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build the app image and the installer Compose builds
+        working-directory: android
+        shell: pwsh
+        run: ./gradlew.bat :desktop:packageExe :desktop:createDistributable --no-daemon
+
+      - name: Build it again with the uninstall step, verbosely
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $appImage = Get-ChildItem "android/desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
+          if (-not $appImage) { throw "no app image" }
+          $argsFile = Get-ChildItem android/desktop/build/compose/tmp -Recurse -Filter "*.args.txt" |
+                      Where-Object { (Get-Content $_.FullName -Raw) -match '(?m)^"?--type"?\r?\n"?exe"?' } |
+                      Select-Object -First 1
+          if (-not $argsFile) { throw "no jpackage argument file builds an exe" }
+          $lines = Get-Content $argsFile.FullName
+
+          # Everything about the contents comes from the app image, so the options that describe how
+          # to build one are dropped; the rest is exactly what Compose asked for.
+          $drop = @("--input", "--main-jar", "--main-class", "--java-options", "--module-path", "--add-modules", "--runtime-image", "--app-content")
+          $kept = @()
+          for ($n = 0; $n -lt $lines.Count; $n++) {
+            $arg = $lines[$n].Trim('"')
+            if ($drop -contains $arg) { $n++; continue }
+            $kept += $lines[$n]
+          }
+
+          $mine = "$env:GITHUB_WORKSPACE\jpackage-resources"
+          New-Item -ItemType Directory -Force -Path $mine | Out-Null
+          $r = [Array]::IndexOf($kept, "--resource-dir")
+          if ($r -ge 0) {
+            $current = $kept[$r + 1].Trim('"').Replace('\\', '\')
+            if (Test-Path $current) { Copy-Item "$current\*" -Destination $mine -Recurse -Force }
+            $kept[$r + 1] = '"' + $mine.Replace('\', '\\') + '"'
+          } else {
+            $kept += '--resource-dir'; $kept += '"' + $mine.Replace('\', '\\') + '"'
+          }
+          Copy-Item windows/installer/overrides.wxi -Destination $mine -Force
+          Write-Host "resource dir holds: $((Get-ChildItem $mine | ForEach-Object Name) -join ', ')"
+          $kept += '--app-image'; $kept += '"' + $appImage.FullName.Replace('\', '\\') + '"'
+          $kept += '--verbose'
+          $dest = [Array]::IndexOf($kept, "--dest")
+          if ($dest -ge 0) { $kept[$dest + 1] = '"' + "$env:GITHUB_WORKSPACE\out".Replace('\', '\\') + '"' }
+
+          $newArgs = "$env:GITHUB_WORKSPACE\jpackage-args.txt"
+          Set-Content -Path $newArgs -Value $kept
+          Write-Host "--- arguments ---"; $kept | ForEach-Object { Write-Host "  $_" }
+          Push-Location $argsFile.Directory.FullName
+          $output = & "$env:JAVA_HOME\bin\jpackage.exe" "@$newArgs" 2>&1
+          $code = $LASTEXITCODE
+          Pop-Location
+          $output | ForEach-Object { Write-Host "jpackage: $_" }
+          Write-Host "jpackage exit: $code"
+          Write-Host "produced: $((Get-ChildItem "$env:GITHUB_WORKSPACE\out" -EA SilentlyContinue | ForEach-Object Name) -join ', ')"
+
+      # WiX writes its own errors to files jpackage leaves in its temp folder; print anything useful.
+      - name: Show what WiX left behind
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem $env:TEMP -Filter "jdk.jpackage*" -Directory -EA SilentlyContinue | ForEach-Object {
+            Write-Host "=== $($_.FullName) ==="
+            Get-ChildItem $_.FullName -Recurse -Include *.wxs, *.wxi, *.log -EA SilentlyContinue | ForEach-Object {
+              Write-Host "--- $($_.FullName) ---"
+              if ($_.Extension -eq ".log") { Get-Content $_.FullName -Tail 40 }
+            }
+          }
