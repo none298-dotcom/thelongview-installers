@@ -815,6 +815,12 @@ jobs:
           if (-not (Test-Path $snooze)) { Write-Host "::error::the relaunched app did not drain the request (no snooze-until)"; if (Test-Path $log) { Get-Content $log -Tail 20 }; exit 1 }
           if (Get-ChildItem $req -EA SilentlyContinue) { Write-Host "::error::the request was left behind after the relaunch"; exit 1 }
           Write-Host "the relaunched app picked up the button: snooze-until $(Get-Content $snooze)"
+          # A snooze starts the app in the tray with no window, which is right, and which the window
+          # checks below cannot use. Start it the ordinary way for them.
+          Get-Process "The Long View" -EA SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 3
+          Start-Process -FilePath $exe.FullName
+          Start-Sleep -Seconds ${{ inputs.wait_seconds }}
 
       # The build shipped with the stock Java placeholder in its title bar and in Alt+Tab, and
       # the owner has failed store submissions over exactly that before. It was caught by a
