@@ -800,6 +800,21 @@ jobs:
           $snooze = "$env:APPDATA\TheLongView\snooze-until"
           if (Test-Path $snooze) { Write-Host "the app picked up the button: snooze-until $(Get-Content $snooze)" }
           else { Write-Host "::error::a toast button press did not reach the app (no snooze-until)"; exit 1 }
+          # The other path: the app has been quit from the tray, so nothing is listening. The helper
+          # writes the request and starts the app, which drains it at launch.
+          Get-Process "The Long View" -EA SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 3
+          Remove-Item $snooze -EA SilentlyContinue
+          if (Get-Process "The Long View" -EA SilentlyContinue) { Write-Host "::error::the app did not stop"; exit 1 }
+          Start-Process "thelongview-reminder:snooze/TOMORROW"
+          $deadline = (Get-Date).AddSeconds(60)
+          while (-not (Test-Path $snooze) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          $up = @(Get-Process "The Long View" -EA SilentlyContinue)
+          Write-Host "after a press with the app quit: $($up.Count) app process(es), requests left: $((Get-ChildItem $req -EA SilentlyContinue | ForEach-Object Name) -join ', ')"
+          if ($up.Count -eq 0) { Write-Host "::error::a toast button press with the app quit did not start it"; exit 1 }
+          if (-not (Test-Path $snooze)) { Write-Host "::error::the relaunched app did not drain the request (no snooze-until)"; if (Test-Path $log) { Get-Content $log -Tail 20 }; exit 1 }
+          if (Get-ChildItem $req -EA SilentlyContinue) { Write-Host "::error::the request was left behind after the relaunch"; exit 1 }
+          Write-Host "the relaunched app picked up the button: snooze-until $(Get-Content $snooze)"
 
       # The build shipped with the stock Java placeholder in its title bar and in Alt+Tab, and
       # the owner has failed store submissions over exactly that before. It was caught by a
@@ -986,7 +1001,8 @@ jobs:
             if ($entry) { break }
           }
           if (-not $entry) { Write-Host "::error::no uninstall entry to run"; exit 1 }
-          Stop-Process -Id ${{ steps.launch.outputs.pid }} -Force -EA SilentlyContinue
+          # Every copy: the toast step quits the app and a button press starts it again.
+          Get-Process "The Long View" -EA SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 3
           Write-Host "uninstalling with: $($entry.UninstallString)"
           if ($entry.UninstallString -match '\{[0-9A-Fa-f-]{36}\}') {
