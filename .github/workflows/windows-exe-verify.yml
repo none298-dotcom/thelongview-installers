@@ -806,7 +806,7 @@ jobs:
           Start-Sleep -Seconds 3
           Remove-Item $snooze -EA SilentlyContinue
           if (Get-Process "The Long View" -EA SilentlyContinue) { Write-Host "::error::the app did not stop"; exit 1 }
-          Start-Process "thelongview-reminder:snooze/TOMORROW"
+          Start-Process "thelongview-reminder:snooze/IN_15_MINUTES"  # not TOMORROW: that one clears the snooze by design
           $deadline = (Get-Date).AddSeconds(60)
           while (-not (Test-Path $snooze) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
           $up = @(Get-Process "The Long View" -EA SilentlyContinue)
