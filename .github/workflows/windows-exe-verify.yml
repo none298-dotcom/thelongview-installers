@@ -85,6 +85,13 @@ on:
       # cannot be overwritten, so a sha published today can never be republished. While a
       # version is in review and might come back needing a rebuild, that is a door worth
       # leaving shut. Verification runs as often as it likes; publishing waits to be asked.
+      # Space separated language-REGION tags (ko-KR hi-IN ar-SA ...). For each, the installed app is
+      # restarted in that language and photographed, so each script's font can be seen on Windows.
+      # Empty skips the step. Report only: it never fails the build.
+      languages:
+        description: "Photograph the installed app in these languages (space separated tags, e.g. 'ko-KR ar-SA'). Empty skips."
+        type: string
+        default: ""
       publish:
         description: "Upload the signed installer to its permanent URL. Leave false until the build is one you intend to ship: a published sha can never be republished."
         type: boolean
@@ -986,6 +993,40 @@ jobs:
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           $bmp.Save("artifacts/installed-app.png")
           Write-Host "screenshot saved, $($b.Width)x$($b.Height)"
+
+      # EVERY LANGUAGE'S SCRIPT ON WINDOWS. The app picks its language from the JVM's default locale
+      # (L10n.resolve), and JAVA_TOOL_OPTIONS reaches the packaged runtime, so each language is a
+      # restart with -Duser.language/-Duser.country and one photograph. What this shows is how Skia
+      # finds a font for Hangul, Devanagari, Arabic, Hebrew, Thai and Chinese on a stock Windows
+      # install. A Server runner may carry fewer fonts than Windows 11, so a missing glyph here is a
+      # lead to check, not a verdict.
+      - name: Photograph the installed app in each requested language (report only)
+        if: ${{ always() && inputs.languages != '' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $exe = "${{ steps.launch.outputs.exe }}"
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          foreach ($tag in "${{ inputs.languages }}".Split(" ", [StringSplitOptions]::RemoveEmptyEntries)) {
+            Get-Process | Where-Object { $_.Path -eq $exe } | Stop-Process -Force -EA SilentlyContinue
+            Start-Sleep -Seconds 3
+            $lang, $country = $tag.Split("-")
+            $env:JAVA_TOOL_OPTIONS = "-Duser.language=$lang -Duser.country=$country"
+            $proc = Start-Process -FilePath $exe -PassThru
+            Start-Sleep -Seconds 25
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $g.Dispose()
+            $bmp.Save("artifacts/lang-$tag.png")
+            Write-Host "$tag photographed, app running: $(-not $proc.HasExited)"
+          }
+          Remove-Item Env:JAVA_TOOL_OPTIONS
+          Get-Process | Where-Object { $_.Path -eq $exe } | Stop-Process -Force -EA SilentlyContinue
+          Start-Process -FilePath $exe | Out-Null
+          Start-Sleep -Seconds 15
 
       # Uninstalling has to take the widgets' identity package and the toast's protocol handler with
       # it, through the custom action in windows/installer/main.wxs. LAST of the app checks, because
