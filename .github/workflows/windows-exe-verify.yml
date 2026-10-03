@@ -994,6 +994,36 @@ jobs:
           $bmp.Save("artifacts/installed-app.png")
           Write-Host "screenshot saved, $($b.Width)x$($b.Height)"
 
+      # Checkout inside the app: the helper's WebView2 window on a live Stripe page, photographed,
+      # then closed by hand (exit 3), then sent to the success page (exit 0, the window closes
+      # itself). Nothing is paid: the session is created and left to expire.
+      - name: "Windows helper: the checkout window"
+        if: always()
+        shell: pwsh
+        run: |
+          $exe = Get-Item "${{ steps.launch.outputs.exe }}"
+          $helper = Join-Path $exe.DirectoryName "app\resources\LongViewHelper.exe"
+          $body = '{"billingCycle":"lifetime","currency":"usd","lang":"en"}'
+          $session = Invoke-RestMethod -Method Post -Uri "https://thelongviewapp.com/api/billing/checkout" -ContentType "application/json" -Body $body -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TheLongViewCI"
+          if (-not $session.checkoutUrl) { Write-Host "::error::no checkout URL from the site"; exit 1 }
+          $p = Start-Process $helper -ArgumentList @('checkout', $session.checkoutUrl, '"The Long View Premium"') -PassThru
+          Start-Sleep -Seconds 20
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $bmp.Save("artifacts/checkout-window.png")
+          if ($p.HasExited) { Write-Host "::error::the checkout window exited early with $($p.ExitCode)"; exit 1 }
+          $p.CloseMainWindow() | Out-Null
+          if (-not $p.WaitForExit(15000)) { Write-Host "::error::the checkout window did not close"; $p.Kill(); exit 1 }
+          Write-Host "closed by hand: exit $($p.ExitCode) (3 expected)"
+          if ($p.ExitCode -ne 3) { exit 1 }
+          $q = Start-Process $helper -ArgumentList @('checkout', 'https://thelongviewapp.com/billing-success?ci=1', '"The Long View Premium"') -PassThru
+          if (-not $q.WaitForExit(60000)) { Write-Host "::error::the success page did not close the window"; $q.Kill(); exit 1 }
+          Write-Host "success page: exit $($q.ExitCode) (0 expected)"
+          if ($q.ExitCode -ne 0) { exit 1 }
+
       # EVERY LANGUAGE'S SCRIPT ON WINDOWS. The app picks its language from the JVM's default locale
       # (L10n.resolve), and JAVA_TOOL_OPTIONS reaches the packaged runtime, so each language is a
       # restart with -Duser.language/-Duser.country and one photograph. What this shows is how Skia
