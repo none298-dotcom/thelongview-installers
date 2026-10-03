@@ -1,0 +1,121 @@
+name: Build and verify Linux
+
+# The desktop app on Linux: build the AppImage and the deb from the private source, start the
+# AppImage on a virtual display, and photograph it. Nothing is published from here; the AppImage
+# is uploaded as a run artifact only, and goes on the download page only on the owner's word.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Commit of the private app repo to build"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the private source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: none298-dotcom/thelongview-app
+          ref: ${{ inputs.source_ref }}
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Packages the build and the photographs need
+        run: |
+          sudo apt-get update -qq
+          # fakeroot and dpkg for jpackage's deb; xvfb, a window manager and xdotool to run and
+          # drive the app; imagemagick to photograph; libnotify for the reminder; libfuse2 for the
+          # AppImage itself.
+          sudo apt-get install -y -qq fakeroot xvfb openbox xdotool imagemagick libnotify-bin libfuse2t64 notification-daemon fonts-noto-core
+
+      - name: Build the AppImage and the deb
+        working-directory: android
+        run: |
+          ./gradlew --no-daemon -q :desktop:packageAppImage :desktop:packageDeb
+          find desktop/build/compose/binaries -maxdepth 4 \( -name "*.deb" -o -type d -name "*the-long-view*" \) -print
+
+      - name: Start a display
+        run: |
+          Xvfb :99 -screen 0 1440x900x24 &
+          sleep 2
+          DISPLAY=:99 openbox &
+          sleep 2
+
+      - name: Photograph the first open (onboarding)
+        env:
+          DISPLAY: ":99"
+          THE_LONG_VIEW_DESKTOP_DATA_DIR: ${{ runner.temp }}/fresh
+        run: |
+          mkdir -p artifacts "$THE_LONG_VIEW_DESKTOP_DATA_DIR"
+          app=$(find android/desktop/build/compose/binaries -path "*app*" -type f -name "the-long-view" -perm -u+x | head -1)
+          echo "launcher: $app"
+          "$app" > artifacts/fresh.log 2>&1 &
+          sleep 25
+          xdotool search --name "The Long View" | head -3
+          import -window root artifacts/linux-welcome.png
+          pkill -f the-long-view || true
+          sleep 2
+
+      - name: Photograph each screen with a few weeks of check-ins
+        env:
+          DISPLAY: ":99"
+          THE_LONG_VIEW_DESKTOP_DATA_DIR: ${{ runner.temp }}/seeded
+        run: |
+          mkdir -p "$THE_LONG_VIEW_DESKTOP_DATA_DIR"
+          python3 - <<'PY'
+          import json, os, datetime
+          d = os.environ["THE_LONG_VIEW_DESKTOP_DATA_DIR"]
+          today = datetime.date.today()
+          start = today - datetime.timedelta(days=24)
+          ledger = {}
+          for i in range(24):
+              day = start + datetime.timedelta(days=i)
+              n = max(0, 8 - i // 3)
+              ledger[day.isoformat()] = {"cigarettesSmoked": float(n), "isLogged": True,
+                                         "loggedAtEpochMillis": int(datetime.datetime(day.year, day.month, day.day, 20).timestamp() * 1000)}
+          state = {"profile": {"currentAge": 40, "sex": "unstated", "yearsSmoking": 15.0, "baselineCigarettesPerDay": 12.0},
+                   "trackingStartDay": start.isoformat(), "ledger": ledger}
+          json.dump(state, open(os.path.join(d, "state.json"), "w"))
+          PY
+          app=$(find android/desktop/build/compose/binaries -path "*app*" -type f -name "the-long-view" -perm -u+x | head -1)
+          "$app" > artifacts/seeded.log 2>&1 &
+          sleep 25
+          win=$(xdotool search --name "^The Long View$" | head -1)
+          echo "window: $win"
+          xdotool windowmove "$win" 0 0 windowsize "$win" 1200 820
+          sleep 3
+          import -window root artifacts/linux-first-open.png
+          # The upgrade dialog shows once on the first open; Escape is its "Not now".
+          xdotool key Escape
+          sleep 3
+          import -window root artifacts/linux-today.png
+          # The sidebar, top to bottom: Today, History, Money, Settings.
+          for pair in "History:150" "Money:205" "Settings:260"; do
+            name=${pair%%:*}; y=${pair##*:}
+            xdotool mousemove --window "$win" 100 "$y" click 1
+            sleep 3
+            import -window root "artifacts/linux-$(echo $name | tr A-Z a-z).png"
+          done
+          notify-send "The Long View" "Notification check from CI" || echo "no notification service"
+          pkill -f the-long-view || true
+
+      - name: Upload the photographs and the AppImage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-verification
+          path: |
+            artifacts/
+            android/desktop/build/compose/binaries/**/*.deb
+          retention-days: 14
