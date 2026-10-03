@@ -950,6 +950,45 @@ jobs:
       # been seen on Windows. The autoplay step above leaves the app on Today, so this presses
       # "Make a plan" through the Access Bridge, the way a screen reader would, and photographs the
       # whole screen. Non-blocking until a run has shown what a good capture looks like.
+      # THE UPGRADE DIALOG AND CHECKOUT FROM INSIDE THE APP. The first open shows the upgrade dialog
+      # over Today. Photograph it alone, then press Start 7 days free (Yearly is the default plan), the
+      # way a person would: the APP starts the helper's checkout window, and that window must be the foreground
+      # window (a window that opens behind the app looks like a button that did nothing). Closing it
+      # returns the app to the dialog, and Not now dismisses the dialog for the step below.
+      - name: "Upgrade dialog: photographed alone, and checkout opens in front"
+        if: always()
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint pid);'
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+            $bmp.Save("artifacts/$name.png")
+          }
+          Start-Sleep -Seconds 8
+          Shot "upgrade-dialog"
+          python ci/scripts/jab-probe.py --press "Start 7 days free" --print-limit 5
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::could not press Start 7 days free"; exit 1 }
+          $helper = $null
+          foreach ($i in 1..30) { Start-Sleep -Seconds 1; $helper = Get-Process LongViewHelper -EA SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1; if ($helper) { break } }
+          if (-not $helper) { Write-Host "::error::the app did not open the checkout window"; exit 1 }
+          Start-Sleep -Seconds 15
+          Shot "checkout-from-app"
+          $fg = [W.U]::GetForegroundWindow(); $fgPid = 0; [W.U]::GetWindowThreadProcessId($fg, [ref]$fgPid) | Out-Null
+          $owner = (Get-Process -Id $fgPid -EA SilentlyContinue).ProcessName
+          Write-Host "foreground window belongs to: $owner (pid $fgPid, helper pid $($helper.Id))"
+          $front = ($fgPid -eq $helper.Id)
+          $helper.CloseMainWindow() | Out-Null
+          $helper.WaitForExit(15000) | Out-Null
+          Start-Sleep -Seconds 3
+          Shot "upgrade-dialog-after-checkout"
+          python ci/scripts/jab-probe.py --press "Not now" --print-limit 5
+          Start-Sleep -Seconds 2
+          if (-not $front) { Write-Host "::error::the checkout window opened behind $owner"; exit 1 }
+
       - name: Open a dialog through the Access Bridge and photograph it (non-blocking)
         continue-on-error: true
         shell: pwsh
