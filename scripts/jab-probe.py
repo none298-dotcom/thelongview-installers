@@ -127,6 +127,21 @@ def top_level_windows(user32, title):
     return found, seen
 
 
+def visible_windows(user32):
+    """Every visible top level window, titled or not. A Compose dialog is its own window
+    (compose.layers.type=WINDOW) and need not carry the app's title."""
+    found = []
+    proto = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def callback(hwnd, _lparam):
+        if user32.IsWindowVisible(hwnd):
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(proto(callback), 0)
+    return found
+
+
 def walk(bridge, vm_id, context, depth, out, limit, buttons):
     """Depth first, and deliberately unbounded in breadth. A tree that is rich at the root and
     empty two levels down is still an app a screen reader cannot read, so the count that this
@@ -273,6 +288,17 @@ def main():
     # mouse click does not.
     if args.press:
         target = find_named(bridge, vm_id.value, context, args.press)
+        # Not in the main window: look in the app's other windows, which is where a dialog lives.
+        for other in visible_windows(user32):
+            if target is not None:
+                break
+            if other == hwnd or not bridge.isJavaWindow(other):
+                continue
+            other_vm, other_context = ctypes.c_int32(), JOBJECT64()
+            if bridge.getAccessibleContextFromHWND(other, ctypes.byref(other_vm), ctypes.byref(other_context)):
+                target = find_named(bridge, other_vm.value, other_context, args.press)
+                if target is not None:
+                    vm_id = other_vm
         if target is None:
             print(f"::error::No control named '{args.press}' in the tree.")
             return 1
