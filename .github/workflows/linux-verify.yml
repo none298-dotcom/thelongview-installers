@@ -45,6 +45,22 @@ jobs:
           ./gradlew --no-daemon -q :desktop:packageAppImage :desktop:packageDeb
           find desktop/build/compose/binaries -maxdepth 5 | head -30
 
+      - name: Wrap the app folder as a real AppImage
+        run: |
+          set -e
+          mkdir -p artifacts-appimage
+          curl -sSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          appdir=TheLongView.AppDir
+          mkdir -p "$appdir"
+          cp -a "android/desktop/build/compose/binaries/main/app/The Long View/." "$appdir/"
+          printf '#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/bin/The Long View" "$@"\n' > "$appdir/AppRun"
+          chmod +x "$appdir/AppRun"
+          cp android/packaging/../desktop/icons/the-long-view.png "$appdir/the-long-view.png" 2>/dev/null || cp android/desktop/icons/the-long-view.png "$appdir/the-long-view.png"
+          sed -e 's/^Exec=.*/Exec=AppRun/' -e 's/^Icon=.*/Icon=the-long-view/' packaging/flathub/com.thelongviewapp.TheLongView.desktop > "$appdir/the-long-view.desktop"
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$appdir" artifacts-appimage/The-Long-View-x86_64.AppImage || { mkdir -p artifacts-appimage; ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$appdir" artifacts-appimage/The-Long-View-x86_64.AppImage; }
+          ls -la artifacts-appimage
+
       - name: Start a display
         run: |
           Xvfb :99 -screen 0 1440x900x24 &
@@ -58,7 +74,7 @@ jobs:
           THE_LONG_VIEW_DESKTOP_DATA_DIR: ${{ runner.temp }}/fresh
         run: |
           mkdir -p artifacts "$THE_LONG_VIEW_DESKTOP_DATA_DIR"
-          app=$(find android/desktop/build/compose/binaries -path "*app-image*/bin/*" -type f -perm -u+x | head -1)
+          app=$(find android/desktop/build/compose/binaries/main/app -path "*/bin/*" -type f -perm -u+x | head -1)
           echo "launcher: $app"
           "$app" > artifacts/fresh.log 2>&1 &
           sleep 25
@@ -88,7 +104,7 @@ jobs:
                    "trackingStartDay": start.isoformat(), "ledger": ledger}
           json.dump(state, open(os.path.join(d, "state.json"), "w"))
           PY
-          app=$(find android/desktop/build/compose/binaries -path "*app-image*/bin/*" -type f -perm -u+x | head -1)
+          app=$(find android/desktop/build/compose/binaries/main/app -path "*/bin/*" -type f -perm -u+x | head -1)
           "$app" > artifacts/seeded.log 2>&1 &
           sleep 25
           win=$(xdotool search --onlyvisible --name "The Long View" | head -1)
@@ -117,5 +133,6 @@ jobs:
           name: linux-verification
           path: |
             artifacts/
+            artifacts-appimage/
             android/desktop/build/compose/binaries/**/*.deb
           retention-days: 14
