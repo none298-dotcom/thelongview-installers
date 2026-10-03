@@ -43,7 +43,7 @@ jobs:
         working-directory: android
         run: |
           ./gradlew --no-daemon -q :desktop:packageAppImage :desktop:packageDeb
-          find desktop/build/compose/binaries -maxdepth 4 \( -name "*.deb" -o -type d -name "*the-long-view*" \) -print
+          find desktop/build/compose/binaries -maxdepth 5 | head -30
 
       - name: Start a display
         run: |
@@ -58,7 +58,7 @@ jobs:
           THE_LONG_VIEW_DESKTOP_DATA_DIR: ${{ runner.temp }}/fresh
         run: |
           mkdir -p artifacts "$THE_LONG_VIEW_DESKTOP_DATA_DIR"
-          app=$(find android/desktop/build/compose/binaries -path "*app*" -type f -name "the-long-view" -perm -u+x | head -1)
+          app=$(find android/desktop/build/compose/binaries -path "*app-image*/bin/*" -type f -perm -u+x | head -1)
           echo "launcher: $app"
           "$app" > artifacts/fresh.log 2>&1 &
           sleep 25
@@ -88,10 +88,10 @@ jobs:
                    "trackingStartDay": start.isoformat(), "ledger": ledger}
           json.dump(state, open(os.path.join(d, "state.json"), "w"))
           PY
-          app=$(find android/desktop/build/compose/binaries -path "*app*" -type f -name "the-long-view" -perm -u+x | head -1)
+          app=$(find android/desktop/build/compose/binaries -path "*app-image*/bin/*" -type f -perm -u+x | head -1)
           "$app" > artifacts/seeded.log 2>&1 &
           sleep 25
-          win=$(xdotool search --name "^The Long View$" | head -1)
+          win=$(xdotool search --onlyvisible --name "The Long View" | head -1)
           echo "window: $win"
           xdotool windowmove "$win" 0 0 windowsize "$win" 1200 820
           sleep 3
