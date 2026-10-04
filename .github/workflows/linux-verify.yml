@@ -126,6 +126,12 @@ jobs:
           # helper's own window. Found by its title, photographed, then closed the way a person
           # closes it, which the dialog reads as "closed, not paid".
           dlg=$(xdotool search --onlyvisible --name "The Long View" | tail -1)
+          wmctrl -lG || true
+          for w in $(xdotool search --onlyvisible --name "The Long View"); do
+            echo "window $w: $(xdotool getwindowgeometry $w | tr '\n' ' ')"
+            import -window $w artifacts/window-$w.png || true
+          done
+          cat "android/desktop/build/compose/binaries/main/app/The Long View/lib/app/The Long View.cfg" || true
           xdotool mousemove --sync 593 562
           sleep 1
           xdotool click 1
