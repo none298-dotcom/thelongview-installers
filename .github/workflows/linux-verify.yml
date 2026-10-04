@@ -91,7 +91,7 @@ jobs:
           sleep 25
           xdotool search --name "The Long View" | head -3
           import -window root artifacts/linux-welcome.png
-          pkill -f the-long-view || true
+          pkill -f "bin/The Long Vie[w]" || true
           sleep 2
 
       - name: Photograph each screen with a few weeks of check-ins
@@ -161,7 +161,7 @@ jobs:
             import -window root "artifacts/linux-$(echo $name | tr A-Z a-z).png"
           done
           notify-send "The Long View" "Notification check from CI" || echo "no notification service"
-          pkill -f the-long-view || true
+          pkill -f "bin/The Long Vie[w]" || true
 
       - name: The checkout helper on its own (exit codes)
         env:
