@@ -191,7 +191,7 @@ jobs:
             url=$(curl -s -X POST https://thelongviewapp.com/api/billing/checkout -H 'content-type: application/json' \
                   -d '{"billingCycle":"lifetime","from":"windows"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["checkoutUrl"])')
             if [ -n "$ua" ]; then export TLV_CHECKOUT_USER_AGENT="$ua"; else unset TLV_CHECKOUT_USER_AGENT; fi
-            "$h" checkout "$url" Checkout > artifacts/helper-console-$n.log 2>&1 &
+            TLV_CHECKOUT_PROBE=1 "$h" checkout "$url" Checkout > artifacts/helper-console-$n.log 2>&1 &
             sleep 25
             import -window root artifacts/linux-helper-alone-$n.png
             wmctrl -c Checkout; sleep 3
