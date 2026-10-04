@@ -37,7 +37,15 @@ jobs:
           # fakeroot and dpkg for jpackage's deb; xvfb, a window manager and xdotool to run and
           # drive the app; imagemagick to photograph; libnotify for the reminder; libfuse2 for the
           # AppImage itself.
-          sudo apt-get install -y -qq fakeroot xvfb openbox xdotool imagemagick libnotify-bin libfuse2t64 notification-daemon fonts-noto-core xcompmgr
+          sudo apt-get install -y -qq fakeroot xvfb openbox xdotool imagemagick libnotify-bin libfuse2t64 notification-daemon fonts-noto-core xcompmgr libwebkit2gtk-4.1-dev wmctrl
+
+      - name: Build the checkout helper (WebKitGTK)
+        run: |
+          set -e
+          mkdir -p android/desktop/app-resources/linux
+          gcc -O2 -Wall -Werror -o android/desktop/app-resources/linux/the-long-view-checkout linux/checkout/checkout.c \
+            $(pkg-config --cflags --libs webkit2gtk-4.1)
+          chmod +x android/desktop/app-resources/linux/the-long-view-checkout
 
       - name: Build the AppImage and the deb
         working-directory: android
@@ -114,6 +122,20 @@ jobs:
           echo "window: $win"
           # Where the upgrade dialog lands with the app window where the desktop put it.
           import -window root artifacts/linux-upgrade-dialog.png
+          # Checkout from the app: "Start 7 days free" (Yearly is selected) opens Stripe in the
+          # helper's own window. Found by its title, photographed, then closed the way a person
+          # closes it, which the dialog reads as "closed, not paid".
+          dlg=$(xdotool search --onlyvisible --name "The Long View" | tail -1)
+          xdotool mousemove 593 562 click 1
+          for i in $(seq 1 30); do pgrep -f the-long-view-checkou[t] >/dev/null && break; sleep 1; done
+          pgrep -af the-long-view-checkou[t] || echo "NO CHECKOUT HELPER RUNNING"
+          sleep 20
+          import -window root artifacts/linux-checkout.png
+          wmctrl -l || true
+          wmctrl -c "Checkout" || true
+          sleep 3
+          pgrep -f the-long-view-checkou[t] && echo "helper still running" || echo "helper closed"
+          import -window root artifacts/linux-after-checkout.png
           xdotool windowmove "$win" 0 0 windowsize "$win" 1200 820
           sleep 3
           import -window root artifacts/linux-first-open.png
@@ -130,6 +152,18 @@ jobs:
           done
           notify-send "The Long View" "Notification check from CI" || echo "no notification service"
           pkill -f the-long-view || true
+
+      - name: The checkout helper on its own (exit codes)
+        env:
+          DISPLAY: ":99"
+        run: |
+          h=$(find android/desktop/build/compose/binaries/main/app -name the-long-view-checkout | head -1)
+          echo "helper in the app image: $h"; ls -l "$h"
+          set +e
+          "$h" checkout "https://example.com/" T; echo "a foreign URL exits $? (want 2)"
+          "$h" checkout "https://thelongviewapp.com/billing-success" T; code=$?
+          echo "the success page exits $code (want 0)"
+          test "$code" = 0
 
       - name: Upload the photographs on their own (small, quick to read)
         if: always()
