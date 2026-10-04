@@ -116,7 +116,9 @@ jobs:
           json.dump(state, open(os.path.join(d, "state.json"), "w"))
           PY
           app=$(find android/desktop/build/compose/binaries/main/app -path "*/bin/*" -type f -perm -u+x | head -1)
-          xdg-settings set default-web-browser google-chrome.desktop || true
+          # The runner's Chrome, without its first-run terms box covering the page.
+          printf '#!/bin/sh\nexec google-chrome --no-first-run --no-default-browser-check "$@"\n' > "$RUNNER_TEMP/browser"
+          chmod +x "$RUNNER_TEMP/browser"; export BROWSER="$RUNNER_TEMP/browser"
           "$app" > artifacts/seeded.log 2>&1 &
           win=""
           for i in $(seq 1 90); do
