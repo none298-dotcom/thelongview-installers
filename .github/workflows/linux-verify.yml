@@ -156,11 +156,13 @@ jobs:
           sleep 3
           import -window root artifacts/linux-first-open.png
           # The upgrade dialog shows once on the first open; Escape is its "Not now".
+          # The dialog comes back after checkout closes; Escape is its "Not now".
+          xdotool mousemove 700 450
           xdotool key Escape
           sleep 3
           import -window root artifacts/linux-today.png
           # The sidebar, top to bottom: Today, History, Money, Settings.
-          for pair in "History:150" "Money:205" "Settings:260"; do
+          for pair in "History:102" "Money:154" "Settings:206"; do
             name=${pair%%:*}; y=${pair##*:}
             xdotool mousemove --window "$win" 100 "$y" click 1
             sleep 3
