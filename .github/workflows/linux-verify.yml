@@ -177,9 +177,8 @@ jobs:
         run: |
           bundled=$(find android/desktop/build/compose/binaries/main/app -name the-long-view-checkout | head -1)
           echo "helper in the app image: $bundled"; ls -l "$bundled"
-          # The copy the app made in its data folder when it started checkout above.
-          h=$(find "${{ runner.temp }}/seeded" -name the-long-view-checkout | head -1)
-          echo "runnable copy: $h"; ls -l "$h"
+          # Packaging drops the execute bit, so test an executable copy.
+          h="${{ runner.temp }}/the-long-view-checkout"; cp "$bundled" "$h"; chmod +x "$h"
           set +e
           "$h" checkout "https://example.com/" T; echo "a foreign URL exits $? (want 2)"
           "$h" checkout "https://thelongviewapp.com/billing-success" T; code=$?
