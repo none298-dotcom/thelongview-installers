@@ -37,7 +37,7 @@ jobs:
           # fakeroot and dpkg for jpackage's deb; xvfb, a window manager and xdotool to run and
           # drive the app; imagemagick to photograph; libnotify for the reminder; libfuse2 for the
           # AppImage itself.
-          sudo apt-get install -y -qq fakeroot xvfb openbox xdotool imagemagick libnotify-bin libfuse2t64 notification-daemon fonts-noto-core
+          sudo apt-get install -y -qq fakeroot xvfb openbox xdotool imagemagick libnotify-bin libfuse2t64 notification-daemon fonts-noto-core xcompmgr
 
       - name: Build the AppImage and the deb
         working-directory: android
@@ -67,6 +67,9 @@ jobs:
           sleep 2
           DISPLAY=:99 openbox &
           sleep 2
+          # A compositor, as every mainstream desktop has, so see-through windows draw as they do there.
+          DISPLAY=:99 xcompmgr &
+          sleep 1
 
       - name: Photograph the first open (onboarding)
         env:
