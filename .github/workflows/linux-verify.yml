@@ -116,6 +116,7 @@ jobs:
           json.dump(state, open(os.path.join(d, "state.json"), "w"))
           PY
           app=$(find android/desktop/build/compose/binaries/main/app -path "*/bin/*" -type f -perm -u+x | head -1)
+          xdg-settings set default-web-browser google-chrome.desktop || true
           "$app" > artifacts/seeded.log 2>&1 &
           win=""
           for i in $(seq 1 90); do
@@ -143,15 +144,18 @@ jobs:
           xdotool click 1
           sleep 3
           import -window root artifacts/linux-after-click.png
-          for i in $(seq 1 30); do pgrep -f the-long-view-checkou[t] >/dev/null && break; sleep 1; done
-          pgrep -af the-long-view-checkou[t] || echo "NO CHECKOUT HELPER RUNNING"
+          # Checkout opens in the browser and the app waits on a "Finish checkout in your browser"
+          # screen. Photographed with the browser in front, then with the app raised.
           sleep 20
-          import -window root artifacts/linux-checkout.png
-          wmctrl -l || true
-          wmctrl -c "Checkout" || true
+          import -window root artifacts/linux-checkout-browser.png
+          xdotool windowactivate --sync "$win" || true
           sleep 3
-          pgrep -f the-long-view-checkou[t] && echo "helper still running" || echo "helper closed"
+          import -window root artifacts/linux-checkout-waiting.png
+          # Escape is the waiting screen's Cancel, which returns to the upgrade dialog.
+          xdotool key Escape
+          sleep 3
           import -window root artifacts/linux-after-checkout.png
+          pkill -f "google-chrom[e]" || true
           xdotool windowmove "$win" 0 0 windowsize "$win" 1200 820
           sleep 3
           import -window root artifacts/linux-first-open.png
