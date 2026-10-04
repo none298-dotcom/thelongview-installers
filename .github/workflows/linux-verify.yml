@@ -183,14 +183,20 @@ jobs:
           "$h" checkout "https://thelongviewapp.com/billing-success" T; code=$?
           echo "the success page exits $code (want 0)"
           test "$code" = 0
-          # A live Stripe page in the helper on its own, with the page's console in the log.
-          url=$(curl -s -X POST https://thelongviewapp.com/api/billing/checkout -H 'content-type: application/json' \
-                -d '{"billingCycle":"lifetime","from":"windows"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["checkoutUrl"])')
-          "$h" checkout "$url" Checkout > artifacts/helper-console.log 2>&1 &
-          sleep 25
-          import -window root artifacts/linux-helper-alone.png
-          wmctrl -c Checkout; sleep 2
-          tail -40 artifacts/helper-console.log
+          # A live Stripe page in the helper on its own, with the page's console in the log, once per
+          # user agent.
+          n=0
+          for ua in "" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"; do
+            n=$((n+1))
+            url=$(curl -s -X POST https://thelongviewapp.com/api/billing/checkout -H 'content-type: application/json' \
+                  -d '{"billingCycle":"lifetime","from":"windows"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["checkoutUrl"])')
+            if [ -n "$ua" ]; then export TLV_CHECKOUT_USER_AGENT="$ua"; else unset TLV_CHECKOUT_USER_AGENT; fi
+            "$h" checkout "$url" Checkout > artifacts/helper-console-$n.log 2>&1 &
+            sleep 25
+            import -window root artifacts/linux-helper-alone-$n.png
+            wmctrl -c Checkout; sleep 3
+            echo "agent $n: $(grep -c 'Load failed' artifacts/helper-console-$n.log) load failures"
+          done
 
       - name: Upload the photographs on their own (small, quick to read)
         if: always()
