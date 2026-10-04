@@ -128,6 +128,14 @@ jobs:
           notify-send "The Long View" "Notification check from CI" || echo "no notification service"
           pkill -f the-long-view || true
 
+      - name: Upload the photographs on their own (small, quick to read)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-photos
+          path: artifacts/
+          retention-days: 14
+
       - name: Upload the photographs and the AppImage
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
