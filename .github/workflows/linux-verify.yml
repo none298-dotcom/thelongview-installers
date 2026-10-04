@@ -183,6 +183,14 @@ jobs:
           "$h" checkout "https://thelongviewapp.com/billing-success" T; code=$?
           echo "the success page exits $code (want 0)"
           test "$code" = 0
+          # A live Stripe page in the helper on its own, with the page's console in the log.
+          url=$(curl -s -X POST https://thelongviewapp.com/api/billing/checkout -H 'content-type: application/json' \
+                -d '{"billingCycle":"lifetime","from":"windows"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["checkoutUrl"])')
+          "$h" checkout "$url" Checkout > artifacts/helper-console.log 2>&1 &
+          sleep 25
+          import -window root artifacts/linux-helper-alone.png
+          wmctrl -c Checkout; sleep 2
+          tail -40 artifacts/helper-console.log
 
       - name: Upload the photographs on their own (small, quick to read)
         if: always()
