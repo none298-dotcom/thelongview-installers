@@ -109,6 +109,8 @@ jobs:
           sleep 25
           win=$(xdotool search --onlyvisible --name "The Long View" | head -1)
           echo "window: $win"
+          # Where the upgrade dialog lands with the app window where the desktop put it.
+          import -window root artifacts/linux-upgrade-dialog.png
           xdotool windowmove "$win" 0 0 windowsize "$win" 1200 820
           sleep 3
           import -window root artifacts/linux-first-open.png
