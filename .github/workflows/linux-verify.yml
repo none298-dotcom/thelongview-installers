@@ -117,8 +117,14 @@ jobs:
           PY
           app=$(find android/desktop/build/compose/binaries/main/app -path "*/bin/*" -type f -perm -u+x | head -1)
           "$app" > artifacts/seeded.log 2>&1 &
-          sleep 25
-          win=$(xdotool search --onlyvisible --name "The Long View" | head -1)
+          win=""
+          for i in $(seq 1 90); do
+            win=$(xdotool search --onlyvisible --name "The Long View" 2>/dev/null | head -1)
+            [ -n "$win" ] && break
+            sleep 1
+          done
+          echo "window after ${i}s"; pgrep -af "bin/The Long Vie[w]" | cut -c1-120
+          sleep 8
           echo "window: $win"
           # Where the upgrade dialog lands with the app window where the desktop put it.
           import -window root artifacts/linux-upgrade-dialog.png
