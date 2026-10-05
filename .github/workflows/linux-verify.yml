@@ -215,7 +215,7 @@ jobs:
         run: |
           set -e
           old=$(grep -oP '^val appVersion = "\K[^"]+' android/desktop/build.gradle.kts)
-          new="$old.1"
+          new="${old%.*}.$(( ${old##*.} + 100 ))"   # three parts, as jpackage requires; test feed only
           echo "old=$old new=$new"
           sed -i "s/^val appVersion = \".*\"/val appVersion = \"$new\"/" android/desktop/build.gradle.kts
           (cd android && ./gradlew --no-daemon -q :desktop:packageAppImage)
