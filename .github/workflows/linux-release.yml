@@ -73,27 +73,42 @@ jobs:
           python3 tools/make-update-feed.py --installer "$v" --platform linux --signature "$sig" --out out/linux.json \
             --url "https://github.com/${{ github.repository }}/releases/download/linux-$VERSION/The-Long-View-$VERSION-x86_64.AppImage"
           cat out/linux.json
-      - uses: snapcore/action-build@v1
-        id: snap
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
+          name: snapbuild
           path: snapbuild
       - name: Publish the files
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          cp "${{ steps.snap.outputs.snap }}" out/
           R=${{ github.repository }}
           gh release create "linux-$VERSION" -R $R --title "Linux $VERSION" --notes "The Long View $VERSION for Linux." out/The-Long-View-$VERSION-x86_64.AppImage out/the-long-view_amd64.deb out/the-long-view-$VERSION-x86_64.tar.gz
           gh release upload latest -R $R --clobber out/The-Long-View-x86_64.AppImage out/the-long-view_amd64.deb out/the-long-view-$VERSION-x86_64.tar.gz out/linux.json
+
+  snap:
+    needs: release
+    # core22 snaps build on a 22.04 host in destructive mode (no LXD on the runner).
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: snapbuild
+          path: snapbuild
+      - name: Build the snap
+        working-directory: snapbuild
+        run: |
+          sudo snap install snapcraft --classic
+          chmod -R a+rX . ; find the-long-view -path '*/bin/*' -type f -exec chmod +x {} +
+          sudo snapcraft pack --destructive-mode
+          ls -la *.snap
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: snap
-          path: ${{ steps.snap.outputs.snap }}
+          path: snapbuild/*.snap
       - name: Upload the snap to the stable channel
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         run: |
           [ -n "$SNAPCRAFT_STORE_CREDENTIALS" ] || { echo "no Snap Store login yet; the snap is in the run's artifacts"; exit 0; }
-          sudo snap install snapcraft --classic
-          snapcraft upload --release=stable "${{ steps.snap.outputs.snap }}"
+          snapcraft upload --release=stable snapbuild/*.snap
