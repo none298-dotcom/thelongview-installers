@@ -265,8 +265,10 @@ jobs:
             done
             sleep 25
             echo "AppImage now: $(sha256sum "$app")"
+            echo "--- reopen log ---"; cat /tmp/the-long-view-update.log || true
+            pgrep -af "bin/The Long Vie[w]" || echo "::error::the app did not reopen"
             win=$(xdotool search --onlyvisible --name "The Long View" 2>/dev/null | head -1)
-            xdotool windowmove "$win" 0 0 windowsize "$win" 1200 820; sleep 3
+            [ -n "$win" ] && xdotool windowmove "$win" 0 0 windowsize "$win" 1200 820; sleep 3
             import -window root artifacts/linux-update-reopened.png
             xdotool mousemove 700 450; xdotool key Escape; sleep 2
             xdotool mousemove --window "$win" 100 206 click 1; sleep 3
