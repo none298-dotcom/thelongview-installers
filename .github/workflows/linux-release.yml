@@ -1,0 +1,94 @@
+# The Linux release: AppImage (signed, self-updating), deb, the Flathub archive and the snap.
+# Run by hand only, on the owner's approval. Publishes the AppImage, deb, archive and linux.json
+# to the `latest` release and uploads the snap to the Snap Store's stable channel.
+name: linux-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Commit of the private app repo to release"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: none298-dotcom/thelongview-app
+          ref: ${{ inputs.source_ref }}
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fakeroot libfuse2t64 libwebkit2gtk-4.1-dev
+      - name: Build the checkout helper
+        run: |
+          mkdir -p android/desktop/app-resources/linux
+          gcc -O2 -Wall -Werror -o android/desktop/app-resources/linux/the-long-view-checkout linux/checkout/checkout.c $(pkg-config --cflags --libs webkit2gtk-4.1)
+      - name: Build the app folder and the deb
+        working-directory: android
+        run: ./gradlew --no-daemon -q :desktop:packageAppImage :desktop:packageDeb
+      - name: AppImage, deb, Flathub archive
+        run: |
+          set -e
+          version=$(grep -o 'appVersion = "[0-9.]*"' android/desktop/build.gradle.kts | grep -o '[0-9.]*[0-9]')
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          mkdir -p out
+          app="android/desktop/build/compose/binaries/main/app/The Long View"
+          curl -sSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          appdir=TheLongView.AppDir; mkdir -p "$appdir"; cp -a "$app/." "$appdir/"
+          printf '#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/bin/The Long View" "$@"\n' > "$appdir/AppRun"; chmod +x "$appdir/AppRun"
+          cp android/desktop/icons/the-long-view.png "$appdir/the-long-view.png"
+          sed -e 's/^Exec=.*/Exec=AppRun/' -e 's/^Icon=.*/Icon=the-long-view/' packaging/flathub/com.thelongviewapp.TheLongView.desktop > "$appdir/the-long-view.desktop"
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$appdir" out/The-Long-View-x86_64.AppImage
+          cp android/desktop/build/compose/binaries/main/deb/*.deb out/the-long-view_amd64.deb
+          tar -C "$app" -czf "out/the-long-view-$version-x86_64.tar.gz" .
+          # The snap's inputs
+          mkdir -p snapbuild/snap/gui
+          sed "s/'VERSION'/'$version'/" packaging/snap/snapcraft.yaml > snapbuild/snap/snapcraft.yaml
+          cp -a "$app" snapbuild/the-long-view
+          cp android/desktop/icons/the-long-view.png snapbuild/snap/gui/the-long-view.png
+          sed -e 's|^Exec=.*|Exec=the-long-view|' -e 's|^Icon=.*|Icon=${SNAP}/snap/gui/the-long-view.png|' packaging/flathub/com.thelongviewapp.TheLongView.desktop > snapbuild/snap/gui/the-long-view.desktop
+          sha256sum out/*
+      - name: Sign the AppImage and write linux.json
+        env:
+          KEY: ${{ secrets.LINUX_UPDATE_SIGNING_KEY }}
+        run: |
+          set -e
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/key.pem"
+          f=out/The-Long-View-x86_64.AppImage
+          sig=$(openssl pkeyutl -sign -rawin -inkey "$RUNNER_TEMP/key.pem" -in "$f" | base64 -w0)
+          (cd android && TLV_LINUX_SIGNED_APPIMAGE="$GITHUB_WORKSPACE/$f" TLV_LINUX_SIGNATURE="$sig" ./gradlew --no-daemon -q :desktop:test --tests '*LinuxInstallerTest*' --rerun)
+          v="out/The-Long-View-$VERSION-x86_64.AppImage"; cp "$f" "$v"
+          python3 tools/make-update-feed.py --installer "$v" --platform linux --signature "$sig" --out out/linux.json \
+            --url "https://github.com/${{ github.repository }}/releases/download/linux-$VERSION/The-Long-View-$VERSION-x86_64.AppImage"
+          cat out/linux.json
+      - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
+        id: snap
+        with:
+          path: snapbuild
+      - name: Publish the files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          cp "${{ steps.snap.outputs.snap }}" out/
+          R=${{ github.repository }}
+          gh release create "linux-$VERSION" -R $R --title "Linux $VERSION" --notes "The Long View $VERSION for Linux." out/The-Long-View-$VERSION-x86_64.AppImage out/the-long-view_amd64.deb out/the-long-view-$VERSION-x86_64.tar.gz
+          gh release upload latest -R $R --clobber out/The-Long-View-x86_64.AppImage out/the-long-view_amd64.deb out/the-long-view-$VERSION-x86_64.tar.gz out/linux.json
+      - name: Upload the snap to the stable channel
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          sudo snap install snapcraft --classic
+          snapcraft upload --release=stable "${{ steps.snap.outputs.snap }}"
