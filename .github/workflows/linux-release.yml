@@ -10,9 +10,6 @@ on:
         description: "Commit of the private app repo to release"
         required: true
 
-env:
-  HAS_SNAP_LOGIN: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS != '' && 'yes' || 'no' }}
-
 permissions:
   contents: write
 
@@ -94,9 +91,9 @@ jobs:
           name: snap
           path: ${{ steps.snap.outputs.snap }}
       - name: Upload the snap to the stable channel
-        if: ${{ env.HAS_SNAP_LOGIN == 'yes' }}
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         run: |
+          [ -n "$SNAPCRAFT_STORE_CREDENTIALS" ] || { echo "no Snap Store login yet; the snap is in the run's artifacts"; exit 0; }
           sudo snap install snapcraft --classic
           snapcraft upload --release=stable "${{ steps.snap.outputs.snap }}"
