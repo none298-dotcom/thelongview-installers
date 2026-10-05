@@ -10,6 +10,9 @@ on:
         description: "Commit of the private app repo to release"
         required: true
 
+env:
+  HAS_SNAP_LOGIN: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS != '' && 'yes' || 'no' }}
+
 permissions:
   contents: write
 
@@ -86,7 +89,12 @@ jobs:
           R=${{ github.repository }}
           gh release create "linux-$VERSION" -R $R --title "Linux $VERSION" --notes "The Long View $VERSION for Linux." out/The-Long-View-$VERSION-x86_64.AppImage out/the-long-view_amd64.deb out/the-long-view-$VERSION-x86_64.tar.gz
           gh release upload latest -R $R --clobber out/The-Long-View-x86_64.AppImage out/the-long-view_amd64.deb out/the-long-view-$VERSION-x86_64.tar.gz out/linux.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: snap
+          path: ${{ steps.snap.outputs.snap }}
       - name: Upload the snap to the stable channel
+        if: ${{ env.HAS_SNAP_LOGIN == 'yes' }}
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         run: |
