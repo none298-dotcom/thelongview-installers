@@ -951,7 +951,7 @@ jobs:
       # "Make a plan" through the Access Bridge, the way a screen reader would, and photographs the
       # whole screen. Non-blocking until a run has shown what a good capture looks like.
       # THE UPGRADE DIALOG AND CHECKOUT FROM INSIDE THE APP. The first open shows the upgrade dialog
-      # over Today. Photograph it alone, then press Start 7 days free (Yearly is the default plan), the
+      # over Today. Photograph it alone, then press Subscribe (Yearly, paid today is the default plan), the
       # way a person would: the APP starts the helper's checkout window, and that window must be the foreground
       # window (a window that opens behind the app looks like a button that did nothing). Closing it
       # returns the app to the dialog, and Not now dismisses the dialog for the step below.
@@ -970,8 +970,8 @@ jobs:
           }
           Start-Sleep -Seconds 8
           Shot "upgrade-dialog"
-          python ci/scripts/jab-probe.py --press "Start 7 days free" --print-limit 5
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::could not press Start 7 days free"; exit 1 }
+          python ci/scripts/jab-probe.py --press "Subscribe" --print-limit 5
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::could not press Subscribe"; exit 1 }
           $helper = $null
           foreach ($i in 1..30) { Start-Sleep -Seconds 1; $helper = Get-Process LongViewHelper -EA SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1; if ($helper) { break } }
           if (-not $helper) { Write-Host "::error::the app did not open the checkout window"; exit 1 }

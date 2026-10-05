@@ -151,7 +151,7 @@ jobs:
           echo "window: $win"
           # Where the upgrade dialog lands with the app window where the desktop put it.
           import -window root artifacts/linux-upgrade-dialog.png
-          # Checkout from the app: "Start 7 days free" (Yearly is selected) opens Stripe in the
+          # Checkout from the app: "Subscribe" (Yearly, paid today is selected) opens Stripe in the
           # helper's own window. Found by its title, photographed, then closed the way a person
           # closes it, which the dialog reads as "closed, not paid".
           dlg=$(xdotool search --onlyvisible --name "The Long View" | tail -1)
