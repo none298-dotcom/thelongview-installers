@@ -10,9 +10,14 @@ on:
       source_ref:
         description: "Commit of the private app repo to build"
         required: true
+      click_install:
+        description: "Where Install now is on the 1200x820 window, as x,y (blank: photograph the offer only)"
+        required: false
+        default: ""
 
 permissions:
-  contents: read
+  # write, for the test feed on the linux-update-test release (never the latest release)
+  contents: write
 
 jobs:
   build-and-verify:
@@ -68,6 +73,21 @@ jobs:
           sed -e 's/^Exec=.*/Exec=AppRun/' -e 's/^Icon=.*/Icon=the-long-view/' packaging/flathub/com.thelongviewapp.TheLongView.desktop > "$appdir/the-long-view.desktop"
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$appdir" artifacts-appimage/The-Long-View-x86_64.AppImage || { mkdir -p artifacts-appimage; ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$appdir" artifacts-appimage/The-Long-View-x86_64.AppImage; }
           ls -la artifacts-appimage
+
+      - name: Sign the AppImage with the release key
+        env:
+          KEY: ${{ secrets.LINUX_UPDATE_SIGNING_KEY }}
+        run: |
+          set -e
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/key.pem"
+          f=artifacts-appimage/The-Long-View-x86_64.AppImage
+          openssl pkeyutl -sign -rawin -inkey "$RUNNER_TEMP/key.pem" -in "$f" | base64 -w0 > "$f.sig"
+          sha256sum "$f" | tee "$f.sha256"
+          # The app's own check, against this exact file and its signature.
+          cd android
+          TLV_LINUX_SIGNED_APPIMAGE="$GITHUB_WORKSPACE/$f" TLV_LINUX_SIGNATURE="$(cat "$GITHUB_WORKSPACE/$f.sig")" \
+            ./gradlew --no-daemon -q :desktop:test --tests '*LinuxInstallerTest*' --rerun
+          grep -o 'tests="[0-9]*" skipped="[0-9]*" failures="[0-9]*"' desktop/build/test-results/test/TEST-*LinuxInstallerTest.xml
 
       - name: Start a display
         run: |
@@ -175,6 +195,84 @@ jobs:
             import -window root "artifacts/linux-$(echo $name | tr A-Z a-z).png"
           done
           notify-send "The Long View" "Notification check from CI" || echo "no notification service"
+          pkill -f "bin/The Long Vie[w]" || true
+
+      # The update, end to end: this build installed as an AppImage, a test build one step newer
+      # published to a test feed, the offer, Install now, and the new version reopening.
+      - name: Check out this repo's own scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: ci
+
+      - name: Build and publish a newer test AppImage to a test feed
+        env:
+          KEY: ${{ secrets.LINUX_UPDATE_SIGNING_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: a20a6afef6c2b00fa8406e8755103537
+          R2_BUCKET: thelongview-downloads
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          old=$(grep -oP '^val appVersion = "\K[^"]+' android/desktop/build.gradle.kts)
+          new="$old.1"
+          echo "old=$old new=$new"
+          sed -i "s/^val appVersion = \".*\"/val appVersion = \"$new\"/" android/desktop/build.gradle.kts
+          (cd android && ./gradlew --no-daemon -q :desktop:packageAppImage)
+          appdir=New.AppDir; rm -rf "$appdir"; mkdir -p "$appdir"
+          cp -a "android/desktop/build/compose/binaries/main/app/The Long View/." "$appdir/"
+          cp TheLongView.AppDir/AppRun TheLongView.AppDir/the-long-view.png TheLongView.AppDir/the-long-view.desktop "$appdir/"
+          f="$RUNNER_TEMP/The-Long-View-$new-x86_64.AppImage"
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$appdir" "$f"
+          sig=$(openssl pkeyutl -sign -rawin -inkey "$RUNNER_TEMP/key.pem" -in "$f" | base64 -w0)
+          key="linux-test/${{ github.run_id }}/The-Long-View-$new-x86_64.AppImage"
+          (cd ci && npm install --no-save --silent "@aws-sdk/client-s3@3")
+          node ci/scripts/r2-put.mjs "$f" "$key"
+          python3 tools/make-update-feed.py --installer "$f" --platform linux --signature "$sig" \
+            --url "https://dl.thelongviewapp.com/$key" --out "$RUNNER_TEMP/linux.json"
+          gh release view linux-update-test -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create linux-update-test -R "$GITHUB_REPOSITORY" --prerelease --title "Linux update test feed" --notes "CI only. The app reads this feed only when THE_LONG_VIEW_UPDATE_FEED points at it."
+          gh release upload linux-update-test "$RUNNER_TEMP/linux.json" --clobber -R "$GITHUB_REPOSITORY"
+          echo "OLD=$old" >> "$GITHUB_ENV"; echo "NEW=$new" >> "$GITHUB_ENV"
+
+      - name: Photograph the update from the installed AppImage
+        env:
+          DISPLAY: ":99"
+          THE_LONG_VIEW_DESKTOP_DATA_DIR: ${{ runner.temp }}/seeded
+          THE_LONG_VIEW_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/linux-update-test/linux.json
+        run: |
+          set -x
+          mkdir -p "$RUNNER_TEMP/apps"
+          app="$RUNNER_TEMP/apps/The-Long-View-x86_64.AppImage"
+          cp artifacts-appimage/The-Long-View-x86_64.AppImage "$app"; chmod +x "$app"
+          sha256sum "$app"
+          "$app" > artifacts/update.log 2>&1 &
+          win=""
+          for i in $(seq 1 90); do
+            win=$(xdotool search --onlyvisible --name "The Long View" 2>/dev/null | head -1); [ -n "$win" ] && break; sleep 1
+          done
+          xdotool windowmove "$win" 0 0 windowsize "$win" 1200 820
+          # The offer appears once the new AppImage is downloaded and checked.
+          sleep 60
+          import -window root artifacts/linux-update-offer.png
+          if [ -n "${{ inputs.click_install }}" ]; then
+            xy="${{ inputs.click_install }}"
+            xdotool mousemove --sync "${xy%,*}" "${xy#*,}" click 1
+            sleep 2
+            import -window root artifacts/linux-update-installing.png
+            for i in $(seq 1 60); do
+              pgrep -af "bin/The Long Vie[w]" | grep -q . && [ "$(sha256sum "$app" | cut -c1-64)" != "$(cut -c1-64 artifacts-appimage/The-Long-View-x86_64.AppImage.sha256)" ] && break; sleep 1
+            done
+            sleep 25
+            echo "AppImage now: $(sha256sum "$app")"
+            win=$(xdotool search --onlyvisible --name "The Long View" 2>/dev/null | head -1)
+            xdotool windowmove "$win" 0 0 windowsize "$win" 1200 820; sleep 3
+            import -window root artifacts/linux-update-reopened.png
+            xdotool mousemove 700 450; xdotool key Escape; sleep 2
+            xdotool mousemove --window "$win" 100 206 click 1; sleep 3
+            import -window root artifacts/linux-update-settings.png
+          fi
+          cat artifacts/update.log | grep -i update || true
           pkill -f "bin/The Long Vie[w]" || true
 
       - name: The checkout helper on its own (exit codes)
