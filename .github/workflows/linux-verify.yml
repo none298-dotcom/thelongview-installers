@@ -267,8 +267,13 @@ jobs:
             echo "AppImage now: $(sha256sum "$app")"
             echo "--- reopen log ---"; cat /tmp/the-long-view-update.log || true
             pgrep -af "bin/The Long Vie[w]" || { echo "::error::the app did not reopen"; exit 1; }
-            win=$(xdotool search --onlyvisible --name "The Long View" 2>/dev/null | head -1)
-            [ -n "$win" ] && xdotool windowmove "$win" 0 0 windowsize "$win" 1200 820; sleep 3
+            # The largest visible window with the app's name, raised first: the first match was
+            # sometimes not the main window, and the sidebar clicks landed 48 px off.
+            win=$(for w in $(xdotool search --onlyvisible --name "The Long View" 2>/dev/null); do
+                    eval "$(xdotool getwindowgeometry --shell "$w")"; echo "$((WIDTH*HEIGHT)) $w"
+                  done | sort -n | tail -1 | cut -d' ' -f2)
+            echo "reopened window: $win"; xdotool getwindowgeometry "$win" || true
+            [ -n "$win" ] && xdotool windowactivate --sync "$win" windowmove "$win" 0 0 windowsize "$win" 1200 820; sleep 3
             import -window root artifacts/linux-update-reopened.png
             xdotool mousemove 700 450; xdotool key Escape; sleep 2
             xdotool mousemove --window "$win" 100 206 click 1; sleep 3
