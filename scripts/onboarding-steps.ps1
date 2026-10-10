@@ -35,7 +35,7 @@ function ContentFraction($bmp) {
   return 1.0 - ((($counts.Values | Measure-Object -Maximum).Maximum) / [double]$tot)
 }
 
-$steps = @("WELCOME", "AGE", "SEX", "YEARS_SMOKING", "CIGARETTES_PER_DAY", "PHOTO", "CLOSING")
+$steps = @("WELCOME", "ABOUT_YOU", "HOW_MUCH", "REASON", "WIN_BACK", "PLAN", "CHECK_INS", "WIDGETS", "HEARD_ABOUT")
 $blank = @()
 foreach ($s in $steps) {
   Get-Process -Name "The Long View" -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
