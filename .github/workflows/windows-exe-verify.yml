@@ -950,8 +950,8 @@ jobs:
       # been seen on Windows. The autoplay step above leaves the app on Today, so this presses
       # "Make a plan" through the Access Bridge, the way a screen reader would, and photographs the
       # whole screen. Non-blocking until a run has shown what a good capture looks like.
-      # THE UPGRADE DIALOG AND CHECKOUT FROM INSIDE THE APP. The first open shows the upgrade dialog
-      # over Today. Photograph it alone, then press Subscribe (Yearly, paid today is the default plan), the
+      # THE UPGRADE DIALOG AND CHECKOUT FROM INSIDE THE APP. The Free card on Today opens the upgrade
+      # dialog. Photograph it alone, then press Subscribe (Yearly, paid today is the default plan), the
       # way a person would: the APP starts the helper's checkout window, and that window must be the foreground
       # window (a window that opens behind the app looks like a button that did nothing). Closing it
       # returns the app to the dialog, and Not now dismisses the dialog for the step below.
@@ -968,6 +968,10 @@ jobs:
             New-Item -ItemType Directory -Force -Path artifacts | Out-Null
             $bmp.Save("artifacts/$name.png")
           }
+          # Setup now ends on the Premium screen, so the app does not offer it again on first open.
+          # Today shows the Free card instead; its button opens the same upgrade dialog.
+          python ci/scripts/jab-probe.py --press "See what Premium offers" --print-limit 5
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::could not press See what Premium offers"; exit 1 }
           Start-Sleep -Seconds 8
           Shot "upgrade-dialog"
           python ci/scripts/jab-probe.py --press "Subscribe" --print-limit 5
