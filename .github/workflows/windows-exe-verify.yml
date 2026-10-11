@@ -954,7 +954,7 @@ jobs:
       # dialog. Photograph it alone, then press Subscribe (Yearly, paid today is the default plan), the
       # way a person would: the APP starts the helper's checkout window, and that window must be the foreground
       # window (a window that opens behind the app looks like a button that did nothing). Closing it
-      # returns the app to the dialog, and Not now dismisses the dialog for the step below.
+      # returns the app to the dialog, and Keep using Free dismisses the dialog for the step below.
       - name: "Upgrade dialog: photographed alone, and checkout opens in front"
         if: always()
         shell: pwsh
@@ -990,7 +990,7 @@ jobs:
           $helper.WaitForExit(15000) | Out-Null
           Start-Sleep -Seconds 3
           Shot "upgrade-dialog-after-checkout"
-          python ci/scripts/jab-probe.py --press "Not now" --print-limit 5
+          python ci/scripts/jab-probe.py --press "Keep using Free" --print-limit 5
           Start-Sleep -Seconds 2
           if (-not $front) { Write-Host "::error::the checkout window opened behind $owner"; exit 1 }
 
