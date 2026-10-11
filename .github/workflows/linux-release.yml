@@ -83,7 +83,13 @@ jobs:
         run: |
           set -e
           R=${{ github.repository }}
-          gh release create "linux-$VERSION" -R $R --title "Linux $VERSION" --notes "The Long View $VERSION for Linux." out/The-Long-View-$VERSION-x86_64.AppImage out/the-long-view_amd64.deb out/the-long-view-$VERSION-x86_64.tar.gz
+          FILES="out/The-Long-View-$VERSION-x86_64.AppImage out/the-long-view_amd64.deb out/the-long-view-$VERSION-x86_64.tar.gz"
+          # A rebuild of the same version (a fix shipped before the stores) replaces the files in place.
+          if gh release view "linux-$VERSION" -R $R >/dev/null 2>&1; then
+            gh release upload "linux-$VERSION" -R $R --clobber $FILES
+          else
+            gh release create "linux-$VERSION" -R $R --title "Linux $VERSION" --notes "The Long View $VERSION for Linux." $FILES
+          fi
           gh release upload latest -R $R --clobber out/The-Long-View-x86_64.AppImage out/the-long-view_amd64.deb out/the-long-view-$VERSION-x86_64.tar.gz out/linux.json
 
   snap:
