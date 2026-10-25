@@ -431,6 +431,9 @@ jobs:
           for ($n = 0; $n -lt $kept.Count; $n++) { $argv += $kept[$n].Trim('"').Replace('\\', '\') }
           Write-Host "--- arguments ---"; $argv | ForEach-Object { Write-Host "  $_" }
           Push-Location $argsFile.Directory.FullName
+          # jpackage only names a resource it took from our folder when asked to be verbose; without
+          # --verbose it prints nothing, which made this check cry wolf on a good build (10-25 run).
+          $argv += '--verbose'
           $output = & "$env:JAVA_HOME\bin\jpackage.exe" @argv 2>&1
           $code = $LASTEXITCODE
           Pop-Location
