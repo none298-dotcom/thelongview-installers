@@ -177,7 +177,9 @@ def find_named(bridge, vm_id, context, name):
     info = AccessibleContextInfo()
     if not bridge.getAccessibleContextInfo(vm_id, context, ctypes.byref(info)):
         return None
-    if info.name.strip() == name:
+    shown = info.name.strip()
+    # A trailing * matches a prefix, for labels that carry a live price ("Buy yearly $41.99").
+    if shown == name or (name.endswith("*") and shown.startswith(name[:-1])):
         return context
     for index in range(info.childrenCount):
         child = bridge.getAccessibleChildFromContext(vm_id, context, index)
@@ -199,7 +201,7 @@ def main():
     parser.add_argument("--print-limit", type=int, default=200)
     parser.add_argument("--settle-seconds", type=float, default=8.0)
     parser.add_argument("--press", default=None,
-                        help="after reading the tree, press the control with exactly this name, the "
+                        help="after reading the tree, press the control with exactly this name (a trailing * matches a prefix), the "
                              "way a screen reader would, and fail if it cannot be pressed")
     parser.add_argument("--no-require-button", dest="require_button", action="store_false",
                         help="skip the assertion that some control carries a name")

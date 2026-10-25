@@ -970,8 +970,18 @@ jobs:
           }
           # Setup now ends on the Premium screen, so the app does not offer it again on first open.
           # Today shows the Free card instead; its button opens the same upgrade dialog.
-          python ci/scripts/jab-probe.py --press "See what Premium offers" --print-limit 5
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::could not press See what Premium offers"; exit 1 }
+          # A fresh install is on the 3-day trial, so Today has no upgrade card. The day-3 pop-up is the
+          # way in: relaunch with the pop-up forced on, then "Buy yearly" opens the same upgrade dialog.
+          Get-Process "The Long View" -EA SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 3
+          $env:THE_LONG_VIEW_TRIAL_NOTICE = "ENDS_TODAY"
+          Start-Process -FilePath "${{ steps.launch.outputs.exe }}" | Out-Null
+          Remove-Item Env:THE_LONG_VIEW_TRIAL_NOTICE
+          Start-Sleep -Seconds ${{ inputs.wait_seconds }}
+          Shot "trial-popup"
+          python ci/scripts/jab-probe.py --press "Buy yearly*" --print-limit 5
+          if ($LASTEXITCODE -ne 0) { python ci/scripts/jab-probe.py --press "Buy Premium" --print-limit 5 }
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::could not press Buy yearly from the day-3 pop-up"; exit 1 }
           Start-Sleep -Seconds 8
           Shot "upgrade-dialog"
           python ci/scripts/jab-probe.py --press "Subscribe" --print-limit 5
@@ -990,7 +1000,7 @@ jobs:
           $helper.WaitForExit(15000) | Out-Null
           Start-Sleep -Seconds 3
           Shot "upgrade-dialog-after-checkout"
-          python ci/scripts/jab-probe.py --press "Keep using Free" --print-limit 5
+          python ci/scripts/jab-probe.py --press "Keep using Classic" --print-limit 5
           Start-Sleep -Seconds 2
           if (-not $front) { Write-Host "::error::the checkout window opened behind $owner"; exit 1 }
 
