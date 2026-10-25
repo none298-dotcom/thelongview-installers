@@ -888,7 +888,7 @@ jobs:
       # silent synthesizer, IO log, Tab through the first screen, and asserts on what it spoke.
       - name: Run NVDA against the app and check what it says
         shell: pwsh
-        run: ./ci/scripts/nvda-speech.ps1 -MustSay "Begin" -OutDir artifacts
+        run: ./ci/scripts/nvda-speech.ps1 -MustSay "Why are you quitting" -OutDir artifacts
 
       # Runs whether the probe passed or failed, because the three things it prints are the three
       # ways the bridge goes quiet, and none of them is visible from the probe's side. A missing
