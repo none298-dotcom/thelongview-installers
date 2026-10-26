@@ -1075,6 +1075,15 @@ jobs:
           python ci/scripts/jab-probe.py --press "Settings" --print-limit 400 | Select-String -Pattern "tray|Premium|Upgrade"
           Start-Sleep -Seconds 4
           Shot "settings-premium"
+          # Maximized, then one page down, so the tray row is on screen.
+          $sh = New-Object -ComObject WScript.Shell
+          $null = $sh.AppActivate("The Long View")
+          $sh.SendKeys("% x")
+          Start-Sleep -Seconds 3
+          Shot "settings-premium-max"
+          $sh.SendKeys("{PGDN}")
+          Start-Sleep -Seconds 2
+          Shot "settings-premium-tray"
           Get-Process "The Long View" -EA SilentlyContinue | Stop-Process -Force
           Remove-Item (Join-Path $dir "dev-entitlement.properties") -Force -EA SilentlyContinue
 
