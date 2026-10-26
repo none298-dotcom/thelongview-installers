@@ -1051,6 +1051,33 @@ jobs:
           Start-Sleep -Seconds 5
           Shot "settings-bottom"
 
+      - name: "Premium tray switch: photographed"
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+            $bmp.Save("artifacts/$name.png")
+          }
+          # The app's own dev switch file (the same one the Mac Developer card writes), so no test code ships in the app.
+          Get-Process "The Long View" -EA SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 3
+          $dir = Join-Path $env:APPDATA "TheLongView"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Set-Content -Path (Join-Path $dir "dev-entitlement.properties") -Value "tier=PREMIUM"
+          Start-Process -FilePath "${{ steps.launch.outputs.exe }}" | Out-Null
+          Start-Sleep -Seconds ${{ inputs.wait_seconds }}
+          python ci/scripts/jab-probe.py --press "Settings" --print-limit 400 | Select-String -Pattern "tray|Premium|Upgrade"
+          Start-Sleep -Seconds 4
+          Shot "settings-premium"
+          Get-Process "The Long View" -EA SilentlyContinue | Stop-Process -Force
+          Remove-Item (Join-Path $dir "dev-entitlement.properties") -Force -EA SilentlyContinue
+
       - name: Open a dialog through the Access Bridge and photograph it (non-blocking)
         continue-on-error: true
         shell: pwsh
