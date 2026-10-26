@@ -1028,6 +1028,29 @@ jobs:
           Start-Sleep -Seconds (${{ inputs.wait_seconds }} + 8)
           Shot "tray-popup"
 
+      - name: "Settings bottom card: photographed"
+        if: always()
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+            $bmp.Save("artifacts/$name.png")
+          }
+          # The app scrolls Settings to the end by itself when asked, so the last card is in the photo.
+          Get-Process "The Long View" -EA SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 3
+          $env:THE_LONG_VIEW_SETTINGS_BOTTOM = "1"
+          Start-Process -FilePath "${{ steps.launch.outputs.exe }}" | Out-Null
+          Remove-Item Env:THE_LONG_VIEW_SETTINGS_BOTTOM
+          Start-Sleep -Seconds ${{ inputs.wait_seconds }}
+          python ci/scripts/jab-probe.py --press "Settings" --print-limit 5
+          Start-Sleep -Seconds 5
+          Shot "settings-bottom"
+
       - name: Open a dialog through the Access Bridge and photograph it (non-blocking)
         continue-on-error: true
         shell: pwsh
