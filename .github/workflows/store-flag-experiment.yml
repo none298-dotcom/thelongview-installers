@@ -45,7 +45,7 @@ jobs:
       - name: Install the EXE with TLV_STORE=1 and look for the property
         shell: pwsh
         run: |
-          $p = Start-Process "$PWD\out\FlagTest-1.0.exe" -ArgumentList '/quiet', '/log', "$PWD\exe.log", 'TLV_STORE=1' -PassThru -Wait
+          $p = Start-Process "$PWD\out\FlagTest-1.0.0.exe" -ArgumentList '/quiet', '/log', "$PWD\exe.log", 'TLV_STORE=1' -PassThru -Wait
           Write-Host "exe exit code: $($p.ExitCode)"
           Write-Host "--- every log the bundle wrote ---"
           Get-ChildItem $PWD, $env:TEMP -Filter '*.log' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-10) } | ForEach-Object { Write-Host $_.FullName }
