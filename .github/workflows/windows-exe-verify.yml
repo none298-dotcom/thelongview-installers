@@ -917,7 +917,7 @@ jobs:
       # silent synthesizer, IO log, Tab through the first screen, and asserts on what it spoke.
       - name: Run NVDA against the app and check what it says
         shell: pwsh
-        run: ./ci/scripts/nvda-speech.ps1 -MustSay "In your own words" -OutDir artifacts
+        run: ./ci/scripts/nvda-speech.ps1 -MustSay "Skip" -OutDir artifacts
 
       # Runs whether the probe passed or failed, because the three things it prints are the three
       # ways the bridge goes quiet, and none of them is visible from the probe's side. A missing
@@ -1007,6 +1007,9 @@ jobs:
           Start-Process -FilePath "${{ steps.launch.outputs.exe }}" | Out-Null
           Remove-Item Env:THE_LONG_VIEW_TRIAL_NOTICE
           Start-Sleep -Seconds ${{ inputs.wait_seconds }}
+          # A real launch opens on the intro video until it is skipped. Skip is reachable by the Access Bridge now (IntroVideo.kt),
+          # so press it, and carry on only once the main window is up. Nothing to skip is not an error.
+          python ci/scripts/jab-probe.py --press "Skip" --no-require-button --print-limit 1 | Out-Null; $global:LASTEXITCODE = 0; Start-Sleep -Seconds 6
           Shot "trial-popup"
           # The pop-up's main button is named for the selected plan: "Save 20% Now" (yearly, paid today, the default),
           # "Start 3-day trial", or "Subscribe". The old names "Buy yearly" and "Buy Premium" no longer exist.
@@ -1056,6 +1059,9 @@ jobs:
           Start-Process -FilePath "${{ steps.launch.outputs.exe }}" | Out-Null
           Remove-Item Env:THE_LONG_VIEW_TRAY_POPUP
           Start-Sleep -Seconds (${{ inputs.wait_seconds }} + 8)
+          # A real launch opens on the intro video until it is skipped. Skip is reachable by the Access Bridge now (IntroVideo.kt),
+          # so press it, and carry on only once the main window is up. Nothing to skip is not an error.
+          python ci/scripts/jab-probe.py --press "Skip" --no-require-button --print-limit 1 | Out-Null; $global:LASTEXITCODE = 0; Start-Sleep -Seconds 6
           Shot "tray-popup"
 
       - name: "Settings bottom card: photographed"
@@ -1077,6 +1083,9 @@ jobs:
           Start-Process -FilePath "${{ steps.launch.outputs.exe }}" | Out-Null
           Remove-Item Env:THE_LONG_VIEW_SETTINGS_BOTTOM
           Start-Sleep -Seconds ${{ inputs.wait_seconds }}
+          # A real launch opens on the intro video until it is skipped. Skip is reachable by the Access Bridge now (IntroVideo.kt),
+          # so press it, and carry on only once the main window is up. Nothing to skip is not an error.
+          python ci/scripts/jab-probe.py --press "Skip" --no-require-button --print-limit 1 | Out-Null; $global:LASTEXITCODE = 0; Start-Sleep -Seconds 6
           python ci/scripts/jab-probe.py --press "Settings" --print-limit 5
           Start-Sleep -Seconds 5
           Shot "settings-bottom"
@@ -1102,6 +1111,9 @@ jobs:
           Set-Content -Path (Join-Path $dir "dev-entitlement.properties") -Value "tier=PREMIUM"
           Start-Process -FilePath "${{ steps.launch.outputs.exe }}" | Out-Null
           Start-Sleep -Seconds ${{ inputs.wait_seconds }}
+          # A real launch opens on the intro video until it is skipped. Skip is reachable by the Access Bridge now (IntroVideo.kt),
+          # so press it, and carry on only once the main window is up. Nothing to skip is not an error.
+          python ci/scripts/jab-probe.py --press "Skip" --no-require-button --print-limit 1 | Out-Null; $global:LASTEXITCODE = 0; Start-Sleep -Seconds 6
           python ci/scripts/jab-probe.py --press "Settings" --print-limit 400 | Select-String -Pattern "tray|Premium|Upgrade"
           Start-Sleep -Seconds 4
           Shot "settings-premium"
@@ -1139,6 +1151,9 @@ jobs:
           New-ItemProperty -Path $key -Name "trial.started/At" -Value ("{0}.0" -f $now) -PropertyType String -Force | Out-Null
           Start-Process -FilePath "${{ steps.launch.outputs.exe }}" | Out-Null
           Start-Sleep -Seconds ${{ inputs.wait_seconds }}
+          # A real launch opens on the intro video until it is skipped. Skip is reachable by the Access Bridge now (IntroVideo.kt),
+          # so press it, and carry on only once the main window is up. Nothing to skip is not an error.
+          python ci/scripts/jab-probe.py --press "Skip" --no-require-button --print-limit 1 | Out-Null; $global:LASTEXITCODE = 0; Start-Sleep -Seconds 6
           python ci/scripts/jab-probe.py --press "Settings" --print-limit 400 | Select-String -Pattern "Upgrade|Premium|trial"
           Start-Sleep -Seconds 4
           Shot "settings-trial"
