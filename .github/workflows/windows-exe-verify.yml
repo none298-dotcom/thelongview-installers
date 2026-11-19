@@ -917,7 +917,7 @@ jobs:
       # silent synthesizer, IO log, Tab through the first screen, and asserts on what it spoke.
       - name: Run NVDA against the app and check what it says
         shell: pwsh
-        run: ./ci/scripts/nvda-speech.ps1 -MustSay "Why are you quitting" -OutDir artifacts
+        run: ./ci/scripts/nvda-speech.ps1 -MustSay "In your own words" -OutDir artifacts
 
       # Runs whether the probe passed or failed, because the three things it prints are the three
       # ways the bridge goes quiet, and none of them is visible from the probe's side. A missing
@@ -1008,9 +1008,13 @@ jobs:
           Remove-Item Env:THE_LONG_VIEW_TRIAL_NOTICE
           Start-Sleep -Seconds ${{ inputs.wait_seconds }}
           Shot "trial-popup"
-          python ci/scripts/jab-probe.py --press "Buy yearly*" --print-limit 5
-          if ($LASTEXITCODE -ne 0) { python ci/scripts/jab-probe.py --press "Buy Premium" --print-limit 5 }
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::could not press Buy yearly from the day-3 pop-up"; exit 1 }
+          # The pop-up's main button is named for the selected plan: "Save 20% Now" (yearly, paid today, the default),
+          # "Start 3-day trial", or "Subscribe". The old names "Buy yearly" and "Buy Premium" no longer exist.
+          foreach ($name in @("Save 20% Now", "Start 3-day trial", "Subscribe")) {
+            python ci/scripts/jab-probe.py --press $name --print-limit 5
+            if ($LASTEXITCODE -eq 0) { break }
+          }
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::could not press the upgrade button from the day-3 pop-up"; exit 1 }
           Start-Sleep -Seconds 8
           Shot "upgrade-dialog"
           python ci/scripts/jab-probe.py --press "Subscribe" --print-limit 5
