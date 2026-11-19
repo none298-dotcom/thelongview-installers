@@ -1,0 +1,65 @@
+name: Store flag experiment
+
+# Question: can ONE installer learn that it was installed by the Microsoft Store, from an extra option that
+# Partner Center passes when it installs (installer parameters)? This builds a tiny throwaway app with jpackage
+# in both installer kinds (exe, the kind The Long View ships, and msi), installs each silently with an extra
+# option TLV_STORE=1, and then reports whether that option reached the Windows Installer package, from the logs.
+# No Long View source is used.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  experiment:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build a tiny app and both installers
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force in, out | Out-Null
+          Set-Content in\Hello.java 'public class Hello { public static void main(String[] a) { System.out.println("hi"); } }'
+          javac -d in in\Hello.java
+          jar cfe in\hello.jar Hello -C in Hello.class
+          foreach ($t in @("exe", "msi")) {
+            jpackage --type $t --name FlagTest --app-version 1.0.0 --input in --main-jar hello.jar --main-class Hello --win-per-user-install --dest out
+            if ($LASTEXITCODE -ne 0) { throw "jpackage $t failed" }
+          }
+          Get-ChildItem out | ForEach-Object { Write-Host "built: $($_.Name) $($_.Length)" }
+
+      - name: Install the MSI with TLV_STORE=1 and look for the property
+        shell: pwsh
+        run: |
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "$PWD\out\FlagTest-1.0.0.msi", '/qn', '/l*v', "$PWD\msi.log", 'TLV_STORE=1' -PassThru -Wait
+          Write-Host "msi exit code: $($p.ExitCode)"
+          Write-Host "--- MSI: lines naming TLV_STORE ---"
+          Select-String -Path msi.log -Pattern 'TLV_STORE' | Select-Object -First 8 | ForEach-Object { Write-Host $_.Line }
+          $hit = (Select-String -Path msi.log -Pattern 'Property\(.\): TLV_STORE = 1' -Quiet)
+          "MSI_FORWARDS=$hit" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          Start-Process msiexec.exe -ArgumentList '/x', "$PWD\out\FlagTest-1.0.0.msi", '/qn' -Wait
+
+      - name: Install the EXE with TLV_STORE=1 and look for the property
+        shell: pwsh
+        run: |
+          $p = Start-Process "$PWD\out\FlagTest-1.0.exe" -ArgumentList '/quiet', '/log', "$PWD\exe.log", 'TLV_STORE=1' -PassThru -Wait
+          Write-Host "exe exit code: $($p.ExitCode)"
+          Write-Host "--- every log the bundle wrote ---"
+          Get-ChildItem $PWD, $env:TEMP -Filter '*.log' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-10) } | ForEach-Object { Write-Host $_.FullName }
+          $logs = Get-ChildItem $PWD, $env:TEMP -Filter '*.log' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-10) }
+          Write-Host "--- EXE: lines naming TLV_STORE ---"
+          $logs | Select-String -Pattern 'TLV_STORE' | Select-Object -First 12 | ForEach-Object { Write-Host "$($_.Path): $($_.Line)" }
+          $hit = [bool]($logs | Select-String -Pattern 'Property\(.\): TLV_STORE = 1' -Quiet)
+          "EXE_FORWARDS_TO_MSI=$hit" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          Write-Host "EXE_FORWARDS_TO_MSI=$hit"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: store-flag-logs
+          path: |
+            msi.log
+            exe.log
