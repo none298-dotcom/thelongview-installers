@@ -445,6 +445,8 @@ jobs:
           $code = $LASTEXITCODE
           Pop-Location
           $output | Select-Object -Last 15 | ForEach-Object { Write-Host "jpackage: $_" }
+          # The last lines are a Java stack trace; WiX's own complaint (CNDL/LGHT/ICE) is earlier, so show it by name.
+          $output | Where-Object { $_ -match 'CNDL|LGHT|ICE[0-9]|error|warning' -and $_ -notmatch '^\s+at ' } | Select-Object -First 25 | ForEach-Object { Write-Host "wix: $_" }
           if (($output -join "`n") -notmatch "loaded from main.wxs") {
             Write-Host "::error::jpackage did not take our main.wxs, so the uninstall step is not in the installer"
           }
