@@ -74,6 +74,13 @@ on:
           - remove_arp_entry   # delete the HKLM uninstall key, must fail 10.2.7
           - dead_button        # stub the welcome button's handler, must fail the click check
           - deny_users_read    # OBSOLETE: only fed the retired cross-account standard-user check
+      store_flag:
+        description: "Install the way Partner Center will, with the extra option TLV_STORE=1, and assert the Store marker is written. 'false' installs as a direct download and asserts there is none."
+        type: choice
+        default: "false"
+        options:
+          - "false"
+          - "true"
       wait_seconds:
         description: "How long to let the installed app run before judging it"
         default: "40"
@@ -588,11 +595,28 @@ jobs:
         shell: pwsh
         run: |
           # /quiet, not /S. This is a WiX Burn bundle, see the header.
-          $p = Start-Process -FilePath "${{ steps.find.outputs.path }}" -ArgumentList '/quiet' -PassThru -Wait
+          $installArgs = @('/quiet')
+          if ('${{ inputs.store_flag }}' -eq 'true') { $installArgs += 'TLV_STORE=1' }
+          Write-Host "install arguments: $($installArgs -join ' ')"
+          $p = Start-Process -FilePath "${{ steps.find.outputs.path }}" -ArgumentList $installArgs -PassThru -Wait
           Write-Host "installer exit code: $($p.ExitCode)"
           # 0 = installed, 3010 = installed, reboot required. Both are success.
           if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
             throw "Silent install failed with exit code $($p.ExitCode)"
+          }
+
+      # The Store marker (windows/installer/main.wxs): Partner Center's installer parameters add TLV_STORE=1, the
+      # installer writes HKCU\Software\TheLongView\Distribution = store, and the app reads it to show the Store
+      # review wording. A direct install passes nothing and must leave no marker.
+      - name: Store marker is written only when TLV_STORE=1
+        shell: pwsh
+        run: |
+          $v = (Get-ItemProperty -Path 'HKCU:\Software\TheLongView' -Name Distribution -ErrorAction SilentlyContinue).Distribution
+          Write-Host "Distribution marker: '$v'"
+          if ('${{ inputs.store_flag }}' -eq 'true') {
+            if ($v -ne 'store') { throw "TLV_STORE=1 was passed but the Store marker is missing" }
+          } else {
+            if ($v) { throw "A direct install must not write a Store marker, found '$v'" }
           }
 
       # perUserInstall = true was expected to break both certification checks
